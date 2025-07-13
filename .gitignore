@@ -49,3 +49,6 @@ Thumbs.db
 *.dll
 *.exe
 
+format_style_fields.json
+Format.h
+venv/
