@@ -27,8 +27,12 @@ class FormatStyleParser:
         self.entries: List[Dict[str, Any]] = []
         self.known_types: set = set()  # Track enum/struct types defined in FormatStyle
         self.enum_definitions: Dict[str, List[Dict[str, str]]] = {}  # Store enum values and descriptions
+        self.struct_definitions: Dict[str, Dict[str, Any]] = {}  # Store struct fields and nested enums
         self.current_enum_name: Optional[str] = None  # Track current enum being parsed
+        self.current_struct_name: Optional[str] = None  # Track current struct being parsed
         self.parsing_enum: bool = False  # Flag to indicate we're inside an enum
+        self.parsing_struct: bool = False  # Flag to indicate we're inside a struct
+        self.struct_brace_depth: int = 0  # Track brace depth within struct
         
     def parse(self) -> dict:
         """
@@ -71,9 +75,15 @@ class FormatStyleParser:
         print(f"   Entries found: {len(self.entries)}")
         print(f"   Known types: {len(self.known_types)}")
         print(f"   Enum definitions: {len(self.enum_definitions)}")
+        print(f"   Struct definitions: {len(self.struct_definitions)}")
         if self.enum_definitions and not self.quiet:
             total_enum_values = sum(len(values) for values in self.enum_definitions.values())
             print(f"   Total enum values: {total_enum_values}")
+        if self.struct_definitions and not self.quiet:
+            total_struct_fields = sum(len(struct_data["fields"]) for struct_data in self.struct_definitions.values())
+            total_nested_enums = sum(len(struct_data["enums"]) for struct_data in self.struct_definitions.values())
+            print(f"   Total struct fields: {total_struct_fields}")
+            print(f"   Total nested enums: {total_nested_enums}")
         
         return {
             "success": True,
@@ -82,6 +92,7 @@ class FormatStyleParser:
             "entries": self.entries,
             "known_types": list(self.known_types),
             "enum_definitions": self.enum_definitions,
+            "struct_definitions": self.struct_definitions,
             "total_lines_parsed": self.line_number - self._find_start_line() + 1
         }
     
@@ -124,11 +135,29 @@ class FormatStyleParser:
                 
                 # If it's an enum, start parsing enum values
                 if stripped.startswith("enum "):
-                    self.current_enum_name = type_name
+                    if self.parsing_struct and self.current_struct_name:
+                        # Nested enum within struct
+                        if self.current_struct_name not in self.struct_definitions:
+                            self.struct_definitions[self.current_struct_name] = {"fields": [], "enums": {}}
+                        self.struct_definitions[self.current_struct_name]["enums"][type_name] = []
+                        self.current_enum_name = f"{self.current_struct_name}.{type_name}"
+                    else:
+                        # Top-level enum
+                        self.enum_definitions[type_name] = []
+                        self.current_enum_name = type_name
+                    
                     self.parsing_enum = True
-                    self.enum_definitions[type_name] = []
                     if not self.quiet:
                         print(f"🔍 Starting enum parsing: {type_name}")
+                
+                # If it's a struct, start parsing struct content
+                elif stripped.startswith("struct "):
+                    self.current_struct_name = type_name
+                    self.parsing_struct = True
+                    self.struct_brace_depth = self.brace_count
+                    self.struct_definitions[type_name] = {"fields": [], "enums": {}}
+                    if not self.quiet:
+                        print(f"🏗️  Starting struct parsing: {type_name}")
             # We'll count braces but not process fields inside nested structures
         
         # Process enum values if we're inside an enum
@@ -141,12 +170,41 @@ class FormatStyleParser:
                     "description": "\n".join(self.comments) if self.comments else "",
                     "line": self.line_number
                 }
-                self.enum_definitions[self.current_enum_name].append(value_entry)
+                
+                # Store in appropriate location (top-level or struct-nested)
+                if "." in self.current_enum_name:
+                    # Nested enum in struct
+                    struct_name, enum_name = self.current_enum_name.split(".", 1)
+                    self.struct_definitions[struct_name]["enums"][enum_name].append(value_entry)
+                else:
+                    # Top-level enum
+                    self.enum_definitions[self.current_enum_name].append(value_entry)
+                
                 if not self.quiet:
                     print(f"🔍 Enum value found: {enum_value} in {self.current_enum_name} at line {self.line_number}")
                 
                 # Clear comments after creating entry
                 self.comments.clear()
+        
+        # Process struct fields if we're inside a struct but not in a nested enum
+        elif self.parsing_struct and not self.parsing_enum and self.brace_count > self.struct_brace_depth:
+            # Skip method/operator definitions
+            if not self._is_method_or_operator(stripped):
+                field_info = self._extract_field_definition(stripped)
+                if field_info and self.current_struct_name:
+                    # Create struct field entry with collected comments
+                    field_entry = {
+                        "type": field_info["type"],
+                        "name": field_info["name"],
+                        "description": "\n".join(self.comments) if self.comments else "",
+                        "line": self.line_number
+                    }
+                    self.struct_definitions[self.current_struct_name]["fields"].append(field_entry)
+                    if not self.quiet:
+                        print(f"🔍 Struct field found: {field_info['type']} {field_info['name']} in {self.current_struct_name} at line {self.line_number}")
+                    
+                    # Clear comments after creating entry
+                    self.comments.clear()
         
         # Process field definitions (only at the top level of FormatStyle)
         elif self.brace_count == 1:  # Only process at FormatStyle level
@@ -188,12 +246,30 @@ class FormatStyleParser:
                 print(f"🔚 Closing brace(s) at line {self.line_number}, brace count: {self.brace_count}")
             
             # Check if we've finished parsing an enum
-            if self.parsing_enum and self.brace_count == 1:
+            if self.parsing_enum and self.brace_count == (self.struct_brace_depth + 1 if self.parsing_struct else 1):
                 self.parsing_enum = False
                 if not self.quiet and self.current_enum_name:
-                    enum_values_count = len(self.enum_definitions.get(self.current_enum_name, []))
-                    print(f"✅ Finished parsing enum {self.current_enum_name} with {enum_values_count} values")
+                    if "." in self.current_enum_name:
+                        # Nested enum
+                        struct_name, enum_name = self.current_enum_name.split(".", 1)
+                        enum_values_count = len(self.struct_definitions[struct_name]["enums"][enum_name])
+                        print(f"✅ Finished parsing nested enum {enum_name} in struct {struct_name} with {enum_values_count} values")
+                    else:
+                        # Top-level enum
+                        enum_values_count = len(self.enum_definitions.get(self.current_enum_name, []))
+                        print(f"✅ Finished parsing enum {self.current_enum_name} with {enum_values_count} values")
                 self.current_enum_name = None
+            
+            # Check if we've finished parsing a struct
+            if self.parsing_struct and self.brace_count == self.struct_brace_depth:
+                self.parsing_struct = False
+                if not self.quiet and self.current_struct_name:
+                    struct_data = self.struct_definitions[self.current_struct_name]
+                    fields_count = len(struct_data["fields"])
+                    enums_count = len(struct_data["enums"])
+                    print(f"✅ Finished parsing struct {self.current_struct_name} with {fields_count} fields and {enums_count} nested enums")
+                self.current_struct_name = None
+                self.struct_brace_depth = 0
             
             # Check if we've exited the FormatStyle struct
             # When brace_count reaches 0, we've closed the main FormatStyle struct
@@ -213,6 +289,45 @@ class FormatStyleParser:
         # Match: enum TypeName or struct TypeName
         match = re.match(r'(?:enum|struct)\s+(\w+)', line)
         return match.group(1) if match else None
+    
+    def _is_method_or_operator(self, line: str) -> bool:
+        """Check if line contains a method or operator definition that should be skipped."""
+        # Skip lines with function calls, operators, constructors, etc.
+        skip_patterns = [
+            # Function/method definitions
+            r'\w+\s*\([^)]*\)\s*[{;]',  # function_name(...) { or ;
+            r'\w+\s*\([^)]*\)\s*const\s*[{;]',  # const methods
+            r'\w+\s*\([^)]*\)\s*override\s*[{;]',  # override methods
+            # Operators
+            r'operator\s*[^\s]+\s*\(',  # operator overloads
+            r'bool\s+operator\s*[^\s]+\s*\(',  # bool operator==, etc.
+            # Constructors/destructors
+            r'^\s*\w+\s*\([^)]*\)\s*[{;:]',  # Constructor
+            r'^\s*~\w+\s*\([^)]*\)\s*[{;]',  # Destructor
+            # Function pointers or complex expressions
+            r'\([^)]*\)\s*->\s*\w+',  # lambda or function pointer return type
+            # Template instantiations
+            r'^\s*template\s*<',  # template declarations
+        ]
+        
+        for pattern in skip_patterns:
+            if re.search(pattern, line):
+                return True
+        
+        # Additional heuristics
+        if (
+            # Lines with parentheses that look like function calls/definitions
+            ('(' in line and ')' in line and '{' in line) or
+            # Lines with operators
+            ('operator' in line) or
+            # Lines ending with function-like syntax
+            (line.strip().endswith(';') and '(' in line and ')' in line) or
+            # Constructor initializer lists
+            (':' in line and '(' in line and ')' in line and not line.strip().endswith(','))
+        ):
+            return True
+        
+        return False
     
     def _extract_enum_value(self, line: str) -> Optional[str]:
         """Extract enum value name from an enum value definition line."""
@@ -373,9 +488,15 @@ Examples:
         print(f"   Field entries found: {len(result['entries'])}")
         print(f"   Known types discovered: {len(result['known_types'])}")
         print(f"   Enum definitions found: {len(result['enum_definitions'])}")
+        print(f"   Struct definitions found: {len(result['struct_definitions'])}")
         if result['enum_definitions']:
             total_enum_values = sum(len(values) for values in result['enum_definitions'].values())
             print(f"   Total enum values: {total_enum_values}")
+        if result['struct_definitions']:
+            total_struct_fields = sum(len(struct_data["fields"]) for struct_data in result['struct_definitions'].values())
+            total_nested_enums = sum(len(struct_data["enums"]) for struct_data in result['struct_definitions'].values())
+            print(f"   Total struct fields: {total_struct_fields}")
+            print(f"   Total nested enums: {total_nested_enums}")
         
         # Save to JSON file
         output_file = args.output or "format_style_fields.json"
@@ -391,6 +512,7 @@ Examples:
                 },
                 "known_types": sorted(result['known_types']),
                 "enum_definitions": result['enum_definitions'],
+                "struct_definitions": result['struct_definitions'],
                 "fields": result['entries']
             }
             
