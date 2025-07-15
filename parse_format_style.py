@@ -26,6 +26,9 @@ class FormatStyleParser:
         self.quiet = quiet
         self.entries: List[Dict[str, Any]] = []
         self.known_types: set = set()  # Track enum/struct types defined in FormatStyle
+        self.enum_definitions: Dict[str, List[Dict[str, str]]] = {}  # Store enum values and descriptions
+        self.current_enum_name: Optional[str] = None  # Track current enum being parsed
+        self.parsing_enum: bool = False  # Flag to indicate we're inside an enum
         
     def parse(self) -> dict:
         """
@@ -67,6 +70,10 @@ class FormatStyleParser:
         print(f"✅ Parsing completed at line {self.line_number}")
         print(f"   Entries found: {len(self.entries)}")
         print(f"   Known types: {len(self.known_types)}")
+        print(f"   Enum definitions: {len(self.enum_definitions)}")
+        if self.enum_definitions and not self.quiet:
+            total_enum_values = sum(len(values) for values in self.enum_definitions.values())
+            print(f"   Total enum values: {total_enum_values}")
         
         return {
             "success": True,
@@ -74,6 +81,7 @@ class FormatStyleParser:
             "end_line": self.line_number,
             "entries": self.entries,
             "known_types": list(self.known_types),
+            "enum_definitions": self.enum_definitions,
             "total_lines_parsed": self.line_number - self._find_start_line() + 1
         }
     
@@ -113,7 +121,32 @@ class FormatStyleParser:
                 self.known_types.add(type_name)
                 if not self.quiet:
                     print(f"📝 Found type definition: {type_name} at line {self.line_number}")
+                
+                # If it's an enum, start parsing enum values
+                if stripped.startswith("enum "):
+                    self.current_enum_name = type_name
+                    self.parsing_enum = True
+                    self.enum_definitions[type_name] = []
+                    if not self.quiet:
+                        print(f"🔍 Starting enum parsing: {type_name}")
             # We'll count braces but not process fields inside nested structures
+        
+        # Process enum values if we're inside an enum
+        elif self.parsing_enum and self.brace_count >= 2:  # Inside enum body
+            enum_value = self._extract_enum_value(stripped)
+            if enum_value and self.current_enum_name:
+                # Create enum value entry with collected comments
+                value_entry = {
+                    "name": enum_value,
+                    "description": "\n".join(self.comments) if self.comments else "",
+                    "line": self.line_number
+                }
+                self.enum_definitions[self.current_enum_name].append(value_entry)
+                if not self.quiet:
+                    print(f"🔍 Enum value found: {enum_value} in {self.current_enum_name} at line {self.line_number}")
+                
+                # Clear comments after creating entry
+                self.comments.clear()
         
         # Process field definitions (only at the top level of FormatStyle)
         elif self.brace_count == 1:  # Only process at FormatStyle level
@@ -154,6 +187,14 @@ class FormatStyleParser:
             if not self.quiet:
                 print(f"🔚 Closing brace(s) at line {self.line_number}, brace count: {self.brace_count}")
             
+            # Check if we've finished parsing an enum
+            if self.parsing_enum and self.brace_count == 1:
+                self.parsing_enum = False
+                if not self.quiet and self.current_enum_name:
+                    enum_values_count = len(self.enum_definitions.get(self.current_enum_name, []))
+                    print(f"✅ Finished parsing enum {self.current_enum_name} with {enum_values_count} values")
+                self.current_enum_name = None
+            
             # Check if we've exited the FormatStyle struct
             # When brace_count reaches 0, we've closed the main FormatStyle struct
             if self.brace_count == 0:
@@ -172,6 +213,35 @@ class FormatStyleParser:
         # Match: enum TypeName or struct TypeName
         match = re.match(r'(?:enum|struct)\s+(\w+)', line)
         return match.group(1) if match else None
+    
+    def _extract_enum_value(self, line: str) -> Optional[str]:
+        """Extract enum value name from an enum value definition line."""
+        # Skip lines that are not enum values
+        if (line.startswith("enum ") or line.startswith("struct ") or 
+            line.startswith("public:") or line.startswith("private:") or
+            line.startswith("protected:") or line.startswith("//") or
+            line.startswith("/*") or line.startswith("*") or
+            "{" in line or "}" in line or
+            line.startswith("#") or line.startswith("typedef") or
+            not line.strip()):
+            return None
+        
+        # Clean up the line - remove trailing comma, semicolon and extra whitespace
+        cleaned = line.rstrip(",;").strip()
+        if not cleaned:
+            return None
+        
+        # Handle enum values with explicit values (e.g., "Value = 0")
+        if "=" in cleaned:
+            enum_name = cleaned.split("=")[0].strip()
+        else:
+            enum_name = cleaned
+        
+        # Validate enum name (should be a valid identifier)
+        if enum_name and enum_name.replace("_", "").replace(":", "").isalnum():
+            return enum_name
+        
+        return None
     
     def _extract_field_definition(self, line: str) -> Optional[Dict[str, str]]:
         """Extract field type and name from a field definition line."""
@@ -302,6 +372,10 @@ Examples:
         print(f"   Lines parsed: {result['total_lines_parsed']}")
         print(f"   Field entries found: {len(result['entries'])}")
         print(f"   Known types discovered: {len(result['known_types'])}")
+        print(f"   Enum definitions found: {len(result['enum_definitions'])}")
+        if result['enum_definitions']:
+            total_enum_values = sum(len(values) for values in result['enum_definitions'].values())
+            print(f"   Total enum values: {total_enum_values}")
         
         # Save to JSON file
         output_file = args.output or "format_style_fields.json"
@@ -316,6 +390,7 @@ Examples:
                     "parser_version": "1.0"
                 },
                 "known_types": sorted(result['known_types']),
+                "enum_definitions": result['enum_definitions'],
                 "fields": result['entries']
             }
             
