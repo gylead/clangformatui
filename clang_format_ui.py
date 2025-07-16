@@ -18,6 +18,105 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QIcon
+import re
+
+
+class DoxygenParser:
+    """Parser for converting Doxygen markup to HTML for rich text display."""
+    
+    @staticmethod
+    def parse_to_html(doxygen_text: str) -> str:
+        """Convert Doxygen markup to HTML."""
+        if not doxygen_text:
+            return ""
+        
+        html = doxygen_text
+        
+        # Handle escaped backslashes (\\code -> \code)
+        html = html.replace('\\\\', '\\')
+        
+        # Parse version tags
+        html = DoxygenParser._parse_version_tags(html)
+        
+        # Parse code blocks
+        html = DoxygenParser._parse_code_blocks(html)
+        
+        # Parse inline code (backticks or \c command)
+        html = DoxygenParser._parse_inline_code(html)
+        
+        # Convert newlines to HTML breaks (preserve formatting)
+        html = html.replace('\n', '<br>')
+        
+        # Basic text formatting
+        html = DoxygenParser._parse_basic_formatting(html)
+        
+        return html
+    
+    @staticmethod
+    def _parse_version_tags(text: str) -> str:
+        """Parse \\version tags."""
+        # Match \version X.Y or \version X
+        version_pattern = r'\\version\s+([0-9]+(?:\.[0-9]+)?)'
+        
+        def replace_version(match):
+            version = match.group(1)
+            return f'<div style="background-color: #e8f4f8; border-left: 4px solid #3498db; padding: 5px 10px; margin: 5px 0; font-size: 9px;"><strong>Since version {version}</strong></div>'
+        
+        return re.sub(version_pattern, replace_version, text)
+    
+    @staticmethod
+    def _parse_code_blocks(text: str) -> str:
+        """Parse \\code...\\endcode blocks."""
+        # Match code blocks with optional language specification
+        code_pattern = r'\\code(?:\{\.(\w+)\})?\s*(.*?)\\endcode'
+        
+        def replace_code_block(match):
+            language = match.group(1) or 'cpp'
+            code_content = match.group(2).strip()
+            
+            # Clean up the code content
+            code_content = code_content.replace('<br>', '\n')
+            
+            # Language-specific styling
+            lang_color = {
+                'java': '#f39c12',
+                'cpp': '#2ecc71', 
+                'c': '#2ecc71',
+                'python': '#3498db'
+            }.get(language.lower(), '#2ecc71')
+            
+            return f'''<div style="margin: 10px 0;">
+                <div style="background-color: {lang_color}; color: white; padding: 2px 8px; font-size: 8px; font-weight: bold; border-radius: 3px 3px 0 0; display: inline-block;">
+                    {language.upper()}
+                </div>
+                <pre style="background-color: #2b2b2b; color: #ffffff; padding: 10px; margin: 0; border-radius: 0 5px 5px 5px; font-family: 'Consolas', 'Monaco', 'Courier New', monospace; font-size: 9px; white-space: pre-wrap; border-left: 3px solid {lang_color};">{code_content}</pre>
+            </div>'''
+        
+        return re.sub(code_pattern, replace_code_block, text, flags=re.DOTALL)
+    
+    @staticmethod
+    def _parse_inline_code(text: str) -> str:
+        """Parse inline code with \\c or backticks."""
+        # Parse \c command for inline code
+        text = re.sub(r'\\c\s+(\w+)', r'<code style="background-color: #f1f2f6; color: #2f3542; padding: 1px 4px; border-radius: 2px; font-family: monospace; font-size: 9px;">\1</code>', text)
+        
+        # Parse backticks for inline code
+        text = re.sub(r'`([^`]+)`', r'<code style="background-color: #f1f2f6; color: #2f3542; padding: 1px 4px; border-radius: 2px; font-family: monospace; font-size: 9px;">\1</code>', text)
+        
+        return text
+    
+    @staticmethod
+    def _parse_basic_formatting(text: str) -> str:
+        """Parse basic text formatting."""
+        # Bold text (**text** or __text__)
+        text = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', text)
+        text = re.sub(r'__(.*?)__', r'<strong>\1</strong>', text)
+        
+        # Italic text (*text* or _text_)
+        text = re.sub(r'\*(.*?)\*', r'<em>\1</em>', text)
+        text = re.sub(r'_(.*?)_', r'<em>\1</em>', text)
+        
+        return text
 
 
 class BooleanFieldWidget(QWidget):
@@ -106,25 +205,41 @@ class BooleanFieldWidget(QWidget):
         
         layout.addLayout(top_layout)
         
-        # Description label
-        self.description_label = QLabel(self.field_data["description"])
-        self.description_label.setFont(QFont("Arial", 10))  # Increased from 8 to 10
-        self.description_label.setStyleSheet("color: #7f8c8d; margin-left: 20px;")
+        # Description label with rich text support
+        raw_description = self.field_data["description"]
+        formatted_description = DoxygenParser.parse_to_html(raw_description)
+        
+        self.description_label = QLabel()
+        self.description_label.setTextFormat(Qt.RichText)  # Enable rich text
+        self.description_label.setText(formatted_description)
+        self.description_label.setFont(QFont("Arial", 10))
+        self.description_label.setStyleSheet("""
+            QLabel {
+                color: #2c3e50;
+                margin-left: 20px;
+                background-color: #f8f9fa;
+                padding: 8px;
+                border-radius: 4px;
+                border: 1px solid #e9ecef;
+            }
+        """)
         self.description_label.setWordWrap(True)
-        self.description_label.setMaximumWidth(400)
+        self.description_label.setMaximumWidth(450)  # Slightly wider for formatted content
         self.description_label.setVisible(False)  # Initially hidden
+        self.description_label.setOpenExternalLinks(False)  # Security: don't open external links
         layout.addWidget(self.description_label)
         
         # Style the entire widget as a box
         self.setStyleSheet("""
             BooleanFieldWidget {
-                background-color: #f8f9fa;
+                background-color: #ffffff;
                 border: 1px solid #e9ecef;
-                border-radius: 5px;
-                margin: 2px;
+                border-radius: 8px;
+                margin: 3px 0px;
             }
             BooleanFieldWidget:hover {
                 border-color: #3498db;
+                box-shadow: 0 2px 4px rgba(52, 152, 219, 0.1);
             }
         """)
     
