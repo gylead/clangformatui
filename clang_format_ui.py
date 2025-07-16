@@ -13,10 +13,155 @@ from typing import Dict, Any, List
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QScrollArea, QTextEdit, QSplitter, QLabel, QFrame
+    QScrollArea, QTextEdit, QSplitter, QLabel, QFrame, QCheckBox,
+    QPushButton, QGroupBox
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont, QIcon
+
+
+class BooleanFieldWidget(QWidget):
+    """Widget for boolean configuration fields."""
+    
+    value_changed = Signal(str, bool)  # field_name, value
+    value_removed = Signal(str)  # field_name
+    
+    def __init__(self, field_data: Dict[str, Any], parent=None):
+        super().__init__(parent)
+        self.field_name = field_data["name"]
+        self.field_data = field_data
+        self.is_set = False  # Track if this field is currently set in config
+        
+        self.init_ui()
+    
+    def init_ui(self):
+        """Initialize the widget UI."""
+        # Main vertical layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+        
+        # Top row: checkbox and trash button
+        top_layout = QHBoxLayout()
+        
+        # Checkbox with field name
+        self.checkbox = QCheckBox(self.field_name)
+        self.checkbox.setFont(QFont("Arial", 10, QFont.Bold))
+        self.checkbox.stateChanged.connect(self.on_checkbox_changed)
+        top_layout.addWidget(self.checkbox)
+        
+        # Spacer
+        top_layout.addStretch()
+        
+        # Info button (toggles description visibility)
+        self.info_button = QPushButton("ℹ")
+        self.info_button.setFixedSize(30, 30)
+        self.info_button.setToolTip("Show/hide description")
+        self.info_button.setCheckable(True)  # Make it toggleable
+        self.info_button.setChecked(False)  # Initially unchecked (description hidden)
+        self.info_button.clicked.connect(self.on_info_clicked)
+        self.info_button.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 15px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+            QPushButton:checked {
+                background-color: #27ae60;
+            }
+            QPushButton:checked:hover {
+                background-color: #219a52;
+            }
+        """)
+        top_layout.addWidget(self.info_button)
+        
+        # Trash button
+        self.trash_button = QPushButton("🗑")
+        self.trash_button.setFixedSize(30, 30)
+        self.trash_button.setToolTip("Remove this setting")
+        self.trash_button.setEnabled(False)  # Initially disabled
+        self.trash_button.clicked.connect(self.on_trash_clicked)
+        self.trash_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                border: none;
+                border-radius: 15px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+            QPushButton:disabled {
+                background-color: #bdc3c7;
+                color: #7f8c8d;
+            }
+        """)
+        top_layout.addWidget(self.trash_button)
+        
+        layout.addLayout(top_layout)
+        
+        # Description label
+        self.description_label = QLabel(self.field_data["description"])
+        self.description_label.setFont(QFont("Arial", 10))  # Increased from 8 to 10
+        self.description_label.setStyleSheet("color: #7f8c8d; margin-left: 20px;")
+        self.description_label.setWordWrap(True)
+        self.description_label.setMaximumWidth(400)
+        self.description_label.setVisible(False)  # Initially hidden
+        layout.addWidget(self.description_label)
+        
+        # Style the entire widget as a box
+        self.setStyleSheet("""
+            BooleanFieldWidget {
+                background-color: #f8f9fa;
+                border: 1px solid #e9ecef;
+                border-radius: 5px;
+                margin: 2px;
+            }
+            BooleanFieldWidget:hover {
+                border-color: #3498db;
+            }
+        """)
+    
+    def on_checkbox_changed(self, state):
+        """Handle checkbox state change."""
+        is_checked = state == Qt.Checked
+        # Always emit value_changed when checkbox changes, regardless of checked state
+        self.value_changed.emit(self.field_name, is_checked)
+    
+    def on_info_clicked(self):
+        """Handle info button click to toggle description visibility."""
+        is_checked = self.info_button.isChecked()
+        self.description_label.setVisible(is_checked)
+    
+    def on_trash_clicked(self):
+        """Handle trash button click."""
+        # Don't change checkbox state, just remove from dictionary
+        self.value_removed.emit(self.field_name)
+    
+    def set_value(self, value: bool):
+        """Set the checkbox value programmatically."""
+        self.checkbox.setChecked(value)
+        self.is_set = value
+        self.trash_button.setEnabled(value)
+    
+    def update_trash_button_state(self, is_in_config: bool):
+        """Update the trash button state based on whether field is in config dictionary."""
+        self.is_set = is_in_config
+        self.trash_button.setEnabled(is_in_config)
+    
+    def reset_to_default(self):
+        """Reset the field to its default state (unchecked, not configured)."""
+        # Temporarily disconnect the signal to avoid triggering value_changed
+        self.checkbox.stateChanged.disconnect()
+        self.checkbox.setChecked(False)  # Default state is unchecked
+        # Reconnect the signal
+        self.checkbox.stateChanged.connect(self.on_checkbox_changed)
 
 
 class ClangFormatUI(QMainWindow):
@@ -25,6 +170,8 @@ class ClangFormatUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.format_data: Dict[str, Any] = {}
+        self.config_values: Dict[str, Any] = {}  # Store current configuration values
+        self.field_widgets: List[BooleanFieldWidget] = []  # Track created widgets
         self.init_ui()
         self.load_format_data()
         
@@ -93,8 +240,17 @@ class ClangFormatUI(QMainWindow):
         self.config_layout.setContentsMargins(5, 5, 5, 5)
         self.config_layout.setSpacing(8)
         
-        # Placeholder content
-        placeholder_label = QLabel("Configuration options will be loaded here...")
+        # This will be replaced when we load the format data
+        self.create_placeholder_content()
+        
+        scroll_area.setWidget(self.config_widget)
+        left_layout.addWidget(scroll_area)
+        
+        parent.addWidget(left_frame)
+    
+    def create_placeholder_content(self):
+        """Create placeholder content before format data is loaded."""
+        placeholder_label = QLabel("Loading configuration options...")
         placeholder_label.setStyleSheet("""
             QLabel {
                 color: #7f8c8d;
@@ -107,11 +263,6 @@ class ClangFormatUI(QMainWindow):
         
         # Add stretch to push content to top
         self.config_layout.addStretch()
-        
-        scroll_area.setWidget(self.config_widget)
-        left_layout.addWidget(scroll_area)
-        
-        parent.addWidget(left_frame)
         
     def create_right_column(self, parent):
         """Create the right column containing code preview."""
@@ -241,11 +392,106 @@ int main() {
                 self.format_data = json.load(f)
             print(f"Loaded {len(self.format_data.get('fields', []))} format options")
             
-            # TODO: Create UI elements from format_data
-            # This will be implemented in the next step
+            # Create UI elements from format_data
+            self.create_config_widgets()
             
         except (json.JSONDecodeError, IOError) as e:
             print(f"Error loading format data: {e}")
+    
+    def create_config_widgets(self):
+        """Create widgets for configuration options based on loaded data."""
+        # Clear existing content
+        self.clear_layout(self.config_layout)
+        
+        # Filter boolean fields
+        boolean_fields = [
+            field for field in self.format_data.get('fields', [])
+            if field.get('type') == 'bool'
+        ]
+        
+        print(f"Creating widgets for {len(boolean_fields)} boolean fields")
+        
+        # Create section header
+        header_label = QLabel(f"Boolean Options ({len(boolean_fields)} fields)")
+        header_label.setStyleSheet("""
+            QLabel {
+                font-size: 14px;
+                font-weight: bold;
+                color: #2c3e50;
+                padding: 10px 5px;
+                border-bottom: 1px solid #bdc3c7;
+                margin-bottom: 10px;
+            }
+        """)
+        self.config_layout.addWidget(header_label)
+        
+        # Create widgets for each boolean field
+        for field in boolean_fields:
+            widget = BooleanFieldWidget(field)
+            widget.value_changed.connect(self.on_field_value_changed)
+            widget.value_removed.connect(self.on_field_value_removed)
+            self.field_widgets.append(widget)
+            self.config_layout.addWidget(widget)
+        
+        # Add stretch to push content to top
+        self.config_layout.addStretch()
+        
+        # Show some statistics
+        stats_label = QLabel(f"Total fields: {len(self.format_data.get('fields', []))}\n"
+                           f"Boolean fields: {len(boolean_fields)}\n"
+                           f"Other types: {len(self.format_data.get('fields', [])) - len(boolean_fields)}")
+        stats_label.setStyleSheet("""
+            QLabel {
+                color: #7f8c8d;
+                font-size: 9px;
+                padding: 10px;
+                background-color: #ecf0f1;
+                border-radius: 3px;
+                margin-top: 10px;
+            }
+        """)
+        self.config_layout.addWidget(stats_label)
+    
+    def clear_layout(self, layout):
+        """Clear all widgets from a layout."""
+        while layout.count():
+            child = layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+    
+    def on_field_value_changed(self, field_name: str, value: bool):
+        """Handle when a field value is changed."""
+        # Always add to config dictionary when checkbox changes
+        self.config_values[field_name] = value
+        
+        # Update trash button state for this field
+        widget = self.get_field_widget(field_name)
+        if widget:
+            widget.update_trash_button_state(True)  # Field is now in config
+        
+        print(f"Set {field_name} = {value}")
+        print(f"Current config has {len(self.config_values)} values")
+    
+    def on_field_value_removed(self, field_name: str):
+        """Handle when a field value is removed."""
+        if field_name in self.config_values:
+            del self.config_values[field_name]
+            
+            # Update trash button state and reset checkbox for this field
+            widget = self.get_field_widget(field_name)
+            if widget:
+                widget.update_trash_button_state(False)  # Field no longer in config
+                widget.reset_to_default()  # Reset checkbox to unchecked (default state)
+            
+            print(f"Removed {field_name}")
+            print(f"Current config has {len(self.config_values)} values")
+    
+    def get_field_widget(self, field_name: str) -> 'BooleanFieldWidget':
+        """Get the widget for a specific field name."""
+        for widget in self.field_widgets:
+            if widget.field_name == field_name:
+                return widget
+        return None
 
 
 def main():
