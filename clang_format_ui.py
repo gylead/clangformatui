@@ -14,7 +14,7 @@ from typing import Dict, Any, List
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QScrollArea, QTextEdit, QSplitter, QLabel, QFrame, QCheckBox,
-    QPushButton, QGroupBox
+    QPushButton, QGroupBox, QSpinBox
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QIcon
@@ -279,6 +279,185 @@ class BooleanFieldWidget(QWidget):
         self.checkbox.stateChanged.connect(self.on_checkbox_changed)
 
 
+class IntegerFieldWidget(QWidget):
+    """Widget for integer configuration fields."""
+    
+    value_changed = Signal(str, int)  # field_name, value
+    value_removed = Signal(str)  # field_name
+    
+    def __init__(self, field_data: Dict[str, Any], parent=None):
+        super().__init__(parent)
+        self.field_name = field_data["name"]
+        self.field_data = field_data
+        self.is_set = False  # Track if this field is currently set in config
+        
+        self.init_ui()
+    
+    def init_ui(self):
+        """Initialize the widget UI."""
+        # Main vertical layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+        
+        # Top row: field name, spin box, and buttons
+        top_layout = QHBoxLayout()
+        
+        # Field name label
+        self.name_label = QLabel(self.field_name)
+        self.name_label.setFont(QFont("Arial", 10, QFont.Bold))
+        self.name_label.setMinimumWidth(200)  # Ensure consistent spacing
+        top_layout.addWidget(self.name_label)
+        
+        # Integer spin box
+        self.spin_box = QSpinBox()
+        self.spin_box.setRange(-999999, 999999)  # Wide range for various integer values
+        self.spin_box.setValue(0)  # Default value
+        self.spin_box.setFixedWidth(80)
+        self.spin_box.valueChanged.connect(self.on_value_changed)
+        self.spin_box.setStyleSheet("""
+            QSpinBox {
+                padding: 4px;
+                border: 1px solid #bdc3c7;
+                border-radius: 3px;
+                background-color: white;
+                font-size: 10px;
+            }
+            QSpinBox:focus {
+                border-color: #3498db;
+            }
+        """)
+        top_layout.addWidget(self.spin_box)
+        
+        # Spacer
+        top_layout.addStretch()
+        
+        # Info button (toggles description visibility)
+        self.info_button = QPushButton("ℹ")
+        self.info_button.setFixedSize(30, 30)
+        self.info_button.setToolTip("Show/hide description")
+        self.info_button.setCheckable(True)  # Make it toggleable
+        self.info_button.setChecked(False)  # Initially unchecked (description hidden)
+        self.info_button.clicked.connect(self.on_info_clicked)
+        self.info_button.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 15px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+            QPushButton:checked {
+                background-color: #27ae60;
+            }
+            QPushButton:checked:hover {
+                background-color: #219a52;
+            }
+        """)
+        top_layout.addWidget(self.info_button)
+        
+        # Trash button
+        self.trash_button = QPushButton("🗑")
+        self.trash_button.setFixedSize(30, 30)
+        self.trash_button.setToolTip("Remove this setting")
+        self.trash_button.setEnabled(False)  # Initially disabled
+        self.trash_button.clicked.connect(self.on_trash_clicked)
+        self.trash_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                border: none;
+                border-radius: 15px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+            QPushButton:disabled {
+                background-color: #bdc3c7;
+                color: #7f8c8d;
+            }
+        """)
+        top_layout.addWidget(self.trash_button)
+        
+        layout.addLayout(top_layout)
+        
+        # Description label with rich text support
+        raw_description = self.field_data["description"]
+        formatted_description = DoxygenParser.parse_to_html(raw_description)
+        
+        self.description_label = QLabel()
+        self.description_label.setTextFormat(Qt.RichText)  # Enable rich text
+        self.description_label.setText(formatted_description)
+        self.description_label.setFont(QFont("Arial", 10))
+        self.description_label.setStyleSheet("""
+            QLabel {
+                color: #2c3e50;
+                margin-left: 20px;
+                background-color: #f8f9fa;
+                padding: 8px;
+                border-radius: 4px;
+                border: 1px solid #e9ecef;
+            }
+        """)
+        self.description_label.setWordWrap(True)
+        self.description_label.setMaximumWidth(450)  # Slightly wider for formatted content
+        self.description_label.setVisible(False)  # Initially hidden
+        self.description_label.setOpenExternalLinks(False)  # Security: don't open external links
+        layout.addWidget(self.description_label)
+        
+        # Style the entire widget as a box
+        self.setStyleSheet("""
+            IntegerFieldWidget {
+                background-color: #ffffff;
+                border: 1px solid #e9ecef;
+                border-radius: 8px;
+                margin: 3px 0px;
+            }
+            IntegerFieldWidget:hover {
+                border-color: #f39c12;
+                box-shadow: 0 2px 4px rgba(243, 156, 18, 0.1);
+            }
+        """)
+    
+    def on_value_changed(self, value):
+        """Handle spin box value change."""
+        # Always emit value_changed when spin box changes
+        self.value_changed.emit(self.field_name, value)
+    
+    def on_info_clicked(self):
+        """Handle info button click to toggle description visibility."""
+        is_checked = self.info_button.isChecked()
+        self.description_label.setVisible(is_checked)
+    
+    def on_trash_clicked(self):
+        """Handle trash button click."""
+        # Remove from dictionary and reset to default
+        self.value_removed.emit(self.field_name)
+    
+    def set_value(self, value: int):
+        """Set the spin box value programmatically."""
+        self.spin_box.setValue(value)
+        self.is_set = True
+        self.trash_button.setEnabled(True)
+    
+    def update_trash_button_state(self, is_in_config: bool):
+        """Update the trash button state based on whether field is in config dictionary."""
+        self.is_set = is_in_config
+        self.trash_button.setEnabled(is_in_config)
+    
+    def reset_to_default(self):
+        """Reset the field to its default state (0, not configured)."""
+        # Temporarily disconnect the signal to avoid triggering value_changed
+        self.spin_box.valueChanged.disconnect()
+        self.spin_box.setValue(0)  # Default state is 0
+        # Reconnect the signal
+        self.spin_box.valueChanged.connect(self.on_value_changed)
+
+
 class ClangFormatUI(QMainWindow):
     """Main window for the Clang-Format UI application."""
     
@@ -286,7 +465,7 @@ class ClangFormatUI(QMainWindow):
         super().__init__()
         self.format_data: Dict[str, Any] = {}
         self.config_values: Dict[str, Any] = {}  # Store current configuration values
-        self.field_widgets: List[BooleanFieldWidget] = []  # Track created widgets
+        self.field_widgets: List[QWidget] = []  # Track created widgets (both boolean and integer)
         self.init_ui()
         self.load_format_data()
         
@@ -518,43 +697,79 @@ int main() {
         # Clear existing content
         self.clear_layout(self.config_layout)
         
-        # Filter boolean fields
+        # Filter fields by type
         boolean_fields = [
             field for field in self.format_data.get('fields', [])
             if field.get('type') == 'bool'
         ]
         
-        print(f"Creating widgets for {len(boolean_fields)} boolean fields")
+        integer_fields = [
+            field for field in self.format_data.get('fields', [])
+            if field.get('type') in ['int', 'unsigned']
+        ]
         
-        # Create section header
-        header_label = QLabel(f"Boolean Options ({len(boolean_fields)} fields)")
-        header_label.setStyleSheet("""
-            QLabel {
-                font-size: 14px;
-                font-weight: bold;
-                color: #2c3e50;
-                padding: 10px 5px;
-                border-bottom: 1px solid #bdc3c7;
-                margin-bottom: 10px;
-            }
-        """)
-        self.config_layout.addWidget(header_label)
+        print(f"Creating widgets for {len(boolean_fields)} boolean fields and {len(integer_fields)} integer fields")
         
-        # Create widgets for each boolean field
-        for field in boolean_fields:
-            widget = BooleanFieldWidget(field)
-            widget.value_changed.connect(self.on_field_value_changed)
-            widget.value_removed.connect(self.on_field_value_removed)
-            self.field_widgets.append(widget)
-            self.config_layout.addWidget(widget)
+        # Create boolean section
+        if boolean_fields:
+            boolean_header = QLabel(f"Boolean Options ({len(boolean_fields)} fields)")
+            boolean_header.setStyleSheet("""
+                QLabel {
+                    font-size: 14px;
+                    font-weight: bold;
+                    color: #2c3e50;
+                    padding: 10px 5px;
+                    border-bottom: 1px solid #3498db;
+                    margin-bottom: 10px;
+                    background-color: #ecf0f1;
+                }
+            """)
+            self.config_layout.addWidget(boolean_header)
+            
+            # Create widgets for each boolean field
+            for field in boolean_fields:
+                widget = BooleanFieldWidget(field)
+                widget.value_changed.connect(self.on_boolean_value_changed)
+                widget.value_removed.connect(self.on_field_value_removed)
+                self.field_widgets.append(widget)
+                self.config_layout.addWidget(widget)
+        
+        # Create integer section
+        if integer_fields:
+            integer_header = QLabel(f"Integer Options ({len(integer_fields)} fields)")
+            integer_header.setStyleSheet("""
+                QLabel {
+                    font-size: 14px;
+                    font-weight: bold;
+                    color: #2c3e50;
+                    padding: 10px 5px;
+                    border-bottom: 1px solid #f39c12;
+                    margin-bottom: 10px;
+                    margin-top: 15px;
+                    background-color: #fef9e7;
+                }
+            """)
+            self.config_layout.addWidget(integer_header)
+            
+            # Create widgets for each integer field
+            for field in integer_fields:
+                widget = IntegerFieldWidget(field)
+                widget.value_changed.connect(self.on_integer_value_changed)
+                widget.value_removed.connect(self.on_field_value_removed)
+                self.field_widgets.append(widget)
+                self.config_layout.addWidget(widget)
         
         # Add stretch to push content to top
         self.config_layout.addStretch()
         
         # Show some statistics
-        stats_label = QLabel(f"Total fields: {len(self.format_data.get('fields', []))}\n"
+        total_fields = len(self.format_data.get('fields', []))
+        other_fields = total_fields - len(boolean_fields) - len(integer_fields)
+        
+        stats_label = QLabel(f"Total fields: {total_fields}\n"
                            f"Boolean fields: {len(boolean_fields)}\n"
-                           f"Other types: {len(self.format_data.get('fields', [])) - len(boolean_fields)}")
+                           f"Integer fields: {len(integer_fields)}\n"
+                           f"Other types: {other_fields}")
         stats_label.setStyleSheet("""
             QLabel {
                 color: #7f8c8d;
@@ -574,9 +789,9 @@ int main() {
             if child.widget():
                 child.widget().deleteLater()
     
-    def on_field_value_changed(self, field_name: str, value: bool):
-        """Handle when a field value is changed."""
-        # Always add to config dictionary when checkbox changes
+    def on_field_value_changed(self, field_name: str, value):
+        """Handle when a field value is changed (for boolean fields - keeping for compatibility)."""
+        # Always add to config dictionary when value changes
         self.config_values[field_name] = value
         
         # Update trash button state for this field
@@ -585,6 +800,32 @@ int main() {
             widget.update_trash_button_state(True)  # Field is now in config
         
         print(f"Set {field_name} = {value}")
+        print(f"Current config has {len(self.config_values)} values")
+    
+    def on_boolean_value_changed(self, field_name: str, value: bool):
+        """Handle when a boolean field value is changed."""
+        # Always add to config dictionary when checkbox changes
+        self.config_values[field_name] = value
+        
+        # Update trash button state for this field
+        widget = self.get_field_widget(field_name)
+        if widget:
+            widget.update_trash_button_state(True)  # Field is now in config
+        
+        print(f"Set boolean {field_name} = {value}")
+        print(f"Current config has {len(self.config_values)} values")
+    
+    def on_integer_value_changed(self, field_name: str, value: int):
+        """Handle when an integer field value is changed."""
+        # Always add to config dictionary when spin box changes
+        self.config_values[field_name] = value
+        
+        # Update trash button state for this field
+        widget = self.get_field_widget(field_name)
+        if widget:
+            widget.update_trash_button_state(True)  # Field is now in config
+        
+        print(f"Set integer {field_name} = {value}")
         print(f"Current config has {len(self.config_values)} values")
     
     def on_field_value_removed(self, field_name: str):
@@ -601,8 +842,8 @@ int main() {
             print(f"Removed {field_name}")
             print(f"Current config has {len(self.config_values)} values")
     
-    def get_field_widget(self, field_name: str) -> 'BooleanFieldWidget':
-        """Get the widget for a specific field name."""
+    def get_field_widget(self, field_name: str):
+        """Get the widget for a specific field name (returns BooleanFieldWidget or IntegerFieldWidget)."""
         for widget in self.field_widgets:
             if widget.field_name == field_name:
                 return widget
