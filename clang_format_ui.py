@@ -239,7 +239,6 @@ class BooleanFieldWidget(QWidget):
             }
             BooleanFieldWidget:hover {
                 border-color: #3498db;
-                box-shadow: 0 2px 4px rgba(52, 152, 219, 0.1);
             }
         """)
     
@@ -419,7 +418,6 @@ class IntegerFieldWidget(QWidget):
             }
             IntegerFieldWidget:hover {
                 border-color: #f39c12;
-                box-shadow: 0 2px 4px rgba(243, 156, 18, 0.1);
             }
         """)
     
