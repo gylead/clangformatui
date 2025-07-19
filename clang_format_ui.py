@@ -279,7 +279,7 @@ class BooleanFieldWidget(QWidget):
 
 
 class IntegerFieldWidget(QWidget):
-    """Widget for integer configuration fields."""
+    """Widget for integer configuration fields (int, unsigned, std::optional<unsigned>)."""
     
     value_changed = Signal(str, int)  # field_name, value
     value_removed = Signal(str)  # field_name
@@ -288,6 +288,9 @@ class IntegerFieldWidget(QWidget):
         super().__init__(parent)
         self.field_name = field_data["name"]
         self.field_data = field_data
+        self.field_type = field_data.get("type", "int")
+        self.is_optional = "optional" in self.field_type.lower()
+        self.is_unsigned = "unsigned" in self.field_type.lower()
         self.is_set = False  # Track if this field is currently set in config
         
         self.init_ui()
@@ -299,7 +302,7 @@ class IntegerFieldWidget(QWidget):
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(5)
         
-        # Top row: field name, spin box, and buttons
+        # Top row: field name, optional checkbox, spin box, and buttons
         top_layout = QHBoxLayout()
         
         # Field name label
@@ -308,10 +311,35 @@ class IntegerFieldWidget(QWidget):
         self.name_label.setMinimumWidth(200)  # Ensure consistent spacing
         top_layout.addWidget(self.name_label)
         
+        # Optional checkbox (only for optional types)
+        if self.is_optional:
+            self.optional_checkbox = QCheckBox("Enable")
+            self.optional_checkbox.setToolTip("Enable this optional setting")
+            self.optional_checkbox.setChecked(False)  # Initially disabled
+            self.optional_checkbox.stateChanged.connect(self.on_optional_changed)
+            self.optional_checkbox.setStyleSheet("""
+                QCheckBox {
+                    font-size: 9px;
+                    color: #7f8c8d;
+                    margin-right: 5px;
+                }
+                QCheckBox:checked {
+                    color: #27ae60;
+                }
+            """)
+            top_layout.addWidget(self.optional_checkbox)
+        
         # Integer spin box
         self.spin_box = QSpinBox()
-        self.spin_box.setRange(-999999, 999999)  # Wide range for various integer values
-        self.spin_box.setValue(0)  # Default value
+        
+        # Set range based on type
+        if self.is_unsigned:
+            self.spin_box.setRange(0, 999999)  # No negative values for unsigned
+            self.spin_box.setValue(0)  # Default value for unsigned
+        else:
+            self.spin_box.setRange(-999999, 999999)  # Full range for signed int
+            self.spin_box.setValue(0)  # Default value
+        
         self.spin_box.setFixedWidth(80)
         self.spin_box.valueChanged.connect(self.on_value_changed)
         self.spin_box.setStyleSheet("""
@@ -325,8 +353,37 @@ class IntegerFieldWidget(QWidget):
             QSpinBox:focus {
                 border-color: #3498db;
             }
+            QSpinBox:disabled {
+                background-color: #f8f9fa;
+                color: #6c757d;
+            }
         """)
+        
+        # Initially disable spin box for optional fields
+        if self.is_optional:
+            self.spin_box.setEnabled(False)
+        
         top_layout.addWidget(self.spin_box)
+        
+        # Type indicator label
+        type_text = ""
+        if self.is_optional:
+            type_text = "optional "
+        if self.is_unsigned:
+            type_text += "unsigned"
+        else:
+            type_text += "int"
+        
+        self.type_label = QLabel(f"({type_text})")
+        self.type_label.setStyleSheet("""
+            QLabel {
+                font-size: 8px;
+                color: #6c757d;
+                font-style: italic;
+                margin-left: 5px;
+            }
+        """)
+        top_layout.addWidget(self.type_label)
         
         # Spacer
         top_layout.addStretch()
@@ -421,10 +478,38 @@ class IntegerFieldWidget(QWidget):
             }
         """)
     
+    def on_optional_changed(self, state):
+        """Handle optional checkbox state change."""
+        # Compare integer values directly since PySide6 stateChanged emits integers
+        is_checked = state == 2  # Qt.Checked has value 2
+        self.spin_box.setEnabled(is_checked)
+        
+        if is_checked:
+            # Optional field is now enabled, explicitly emit the current value
+            # This ensures the config gets updated and trash button gets enabled
+            current_value = self.spin_box.value()
+            self.value_changed.emit(self.field_name, current_value)
+        else:
+            # Optional field is disabled, remove from config
+            self.value_removed.emit(self.field_name)
+        
+        # Also update trash button state directly to ensure it's in sync
+        self.trash_button.setEnabled(is_checked)
+    
     def on_value_changed(self, value):
         """Handle spin box value change."""
-        # Always emit value_changed when spin box changes
-        self.value_changed.emit(self.field_name, value)
+        # For optional fields, only emit if checkbox is checked
+        # For non-optional fields, always emit
+        should_emit = False
+        
+        if self.is_optional:
+            if hasattr(self, 'optional_checkbox') and self.optional_checkbox.isChecked():
+                should_emit = True
+        else:
+            should_emit = True
+        
+        if should_emit:
+            self.value_changed.emit(self.field_name, value)
     
     def on_info_clicked(self):
         """Handle info button click to toggle description visibility."""
@@ -438,6 +523,10 @@ class IntegerFieldWidget(QWidget):
     
     def set_value(self, value: int):
         """Set the spin box value programmatically."""
+        if self.is_optional and hasattr(self, 'optional_checkbox'):
+            self.optional_checkbox.setChecked(True)
+            self.spin_box.setEnabled(True)
+        
         self.spin_box.setValue(value)
         self.is_set = True
         self.trash_button.setEnabled(True)
@@ -448,12 +537,20 @@ class IntegerFieldWidget(QWidget):
         self.trash_button.setEnabled(is_in_config)
     
     def reset_to_default(self):
-        """Reset the field to its default state (0, not configured)."""
-        # Temporarily disconnect the signal to avoid triggering value_changed
+        """Reset the field to its default state."""
+        # Temporarily disconnect signals to avoid triggering value_changed
         self.spin_box.valueChanged.disconnect()
+        if self.is_optional and hasattr(self, 'optional_checkbox'):
+            self.optional_checkbox.stateChanged.disconnect()
+            self.optional_checkbox.setChecked(False)  # Disable optional field
+            self.spin_box.setEnabled(False)
+        
         self.spin_box.setValue(0)  # Default state is 0
-        # Reconnect the signal
+        
+        # Reconnect signals
         self.spin_box.valueChanged.connect(self.on_value_changed)
+        if self.is_optional and hasattr(self, 'optional_checkbox'):
+            self.optional_checkbox.stateChanged.connect(self.on_optional_changed)
 
 
 class ClangFormatUI(QMainWindow):
@@ -703,7 +800,7 @@ int main() {
         
         integer_fields = [
             field for field in self.format_data.get('fields', [])
-            if field.get('type') in ['int', 'unsigned']
+            if field.get('type') in ['int', 'unsigned', 'std::optional<unsigned>']
         ]
         
         print(f"Creating widgets for {len(boolean_fields)} boolean fields and {len(integer_fields)} integer fields")
