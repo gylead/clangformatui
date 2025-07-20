@@ -14,7 +14,7 @@ from typing import Dict, Any, List
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QScrollArea, QTextEdit, QSplitter, QLabel, QFrame, QCheckBox,
-    QPushButton, QGroupBox, QSpinBox, QLineEdit
+    QPushButton, QGroupBox, QSpinBox, QLineEdit, QRadioButton, QButtonGroup
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QIcon
@@ -786,6 +786,386 @@ class StringFieldWidget(QWidget):
         self.line_edit.textChanged.connect(self.on_text_changed)
 
 
+class EnumFieldWidget(QWidget):
+    """Widget for enum configuration fields."""
+    
+    value_changed = Signal(str, str)  # field_name, enum_value
+    value_removed = Signal(str)  # field_name
+    
+    def __init__(self, field_data: Dict[str, Any], enum_data: Dict[str, Any], parent=None):
+        super().__init__(parent)
+        self.field_name = field_data["name"]
+        self.field_data = field_data
+        self.enum_type = field_data.get("type", "")
+        self.enum_values = enum_data.get(self.enum_type, [])
+        self.selected_value = None
+        self.is_set = False
+        self.is_expanded = False  # Track if enum options are visible
+        
+        # Radio button group for enum values
+        self.button_group = QButtonGroup()
+        self.radio_buttons = []
+        
+        self.init_ui()
+    
+    def init_ui(self):
+        """Initialize the widget UI."""
+        # Main vertical layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+        
+        # Top row: field name, current value, and buttons
+        top_layout = QHBoxLayout()
+        
+        # Field name label
+        self.name_label = QLabel(self.field_name)
+        self.name_label.setFont(QFont("Arial", 10, QFont.Bold))
+        self.name_label.setMinimumWidth(200)  # Ensure consistent spacing
+        top_layout.addWidget(self.name_label)
+        
+        # Current value label
+        self.value_label = QLabel("(no selection)")
+        self.value_label.setStyleSheet("""
+            QLabel {
+                font-size: 10px;
+                color: #7f8c8d;
+                font-style: italic;
+                padding: 4px 8px;
+                background-color: #f8f9fa;
+                border: 1px solid #e9ecef;
+                border-radius: 3px;
+                min-width: 120px;
+            }
+        """)
+        top_layout.addWidget(self.value_label)
+        
+        # Type indicator label
+        self.type_label = QLabel(f"({self.enum_type})")
+        self.type_label.setStyleSheet("""
+            QLabel {
+                font-size: 8px;
+                color: #6c757d;
+                font-style: italic;
+                margin-left: 5px;
+            }
+        """)
+        top_layout.addWidget(self.type_label)
+        
+        # Spacer
+        top_layout.addStretch()
+        
+        # Info button (toggles description and enum options visibility)
+        self.info_button = QPushButton("ℹ")
+        self.info_button.setFixedSize(30, 30)
+        self.info_button.setToolTip("Show/hide enum options and description")
+        self.info_button.setCheckable(True)  # Make it toggleable
+        self.info_button.setChecked(False)  # Initially unchecked (options hidden)
+        self.info_button.clicked.connect(self.on_info_clicked)
+        self.info_button.setStyleSheet("""
+            QPushButton {
+                background-color: #9b59b6;
+                color: white;
+                border: none;
+                border-radius: 15px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #8e44ad;
+            }
+            QPushButton:checked {
+                background-color: #27ae60;
+            }
+            QPushButton:checked:hover {
+                background-color: #219a52;
+            }
+        """)
+        top_layout.addWidget(self.info_button)
+        
+        # Trash button
+        self.trash_button = QPushButton("🗑")
+        self.trash_button.setFixedSize(30, 30)
+        self.trash_button.setToolTip("Remove this setting")
+        self.trash_button.setEnabled(False)  # Initially disabled
+        self.trash_button.clicked.connect(self.on_trash_clicked)
+        self.trash_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                border: none;
+                border-radius: 15px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+            QPushButton:disabled {
+                background-color: #bdc3c7;
+                color: #7f8c8d;
+            }
+        """)
+        top_layout.addWidget(self.trash_button)
+        
+        layout.addLayout(top_layout)
+        
+        # Container for enum description and options (initially hidden)
+        self.content_widget = QWidget()
+        self.content_layout = QVBoxLayout(self.content_widget)
+        self.content_layout.setContentsMargins(10, 10, 10, 10)
+        self.content_layout.setSpacing(8)
+        
+        # Enum description (field description)
+        if self.field_data.get("description"):
+            raw_description = self.field_data["description"]
+            formatted_description = DoxygenParser.parse_to_html(raw_description)
+            
+            self.description_label = QLabel()
+            self.description_label.setTextFormat(Qt.RichText)
+            self.description_label.setText(formatted_description)
+            self.description_label.setFont(QFont("Arial", 10))
+            self.description_label.setStyleSheet("""
+                QLabel {
+                    color: #2c3e50;
+                    background-color: #f8f9fa;
+                    padding: 8px;
+                    border-radius: 4px;
+                    border: 1px solid #e9ecef;
+                    margin-bottom: 10px;
+                }
+            """)
+            self.description_label.setWordWrap(True)
+            self.description_label.setMaximumWidth(450)
+            self.description_label.setOpenExternalLinks(False)
+            self.content_layout.addWidget(self.description_label)
+        
+        # Enum options section
+        options_header = QLabel(f"Available Options ({len(self.enum_values)} values):")
+        options_header.setFont(QFont("Arial", 9, QFont.Bold))
+        options_header.setStyleSheet("""
+            QLabel {
+                color: #2c3e50;
+                margin-bottom: 5px;
+                border-bottom: 1px solid #9b59b6;
+                padding-bottom: 2px;
+            }
+        """)
+        self.content_layout.addWidget(options_header)
+        
+        # Create radio buttons for each enum value
+        for i, enum_value in enumerate(self.enum_values):
+            value_name = enum_value.get("name", "")
+            value_description = enum_value.get("description", "")
+            
+            # Container for each option
+            option_widget = QWidget()
+            option_layout = QVBoxLayout(option_widget)
+            option_layout.setContentsMargins(5, 5, 5, 5)
+            option_layout.setSpacing(3)
+            
+            # Radio button with enum value name
+            radio_button = QRadioButton(value_name)
+            radio_button.setFont(QFont("Arial", 9, QFont.Bold))
+            radio_button.toggled.connect(lambda checked, name=value_name: self.on_option_selected(checked, name))
+            radio_button.setStyleSheet("""
+                QRadioButton {
+                    color: #2c3e50;
+                }
+                QRadioButton:checked {
+                    color: #9b59b6;
+                    font-weight: bold;
+                }
+            """)
+            self.radio_buttons.append(radio_button)
+            self.button_group.addButton(radio_button, i)
+            option_layout.addWidget(radio_button)
+            
+            # Description for this enum value
+            if value_description:
+                formatted_description = DoxygenParser.parse_to_html(value_description)
+                
+                desc_label = QLabel()
+                desc_label.setTextFormat(Qt.RichText)
+                desc_label.setText(formatted_description)
+                desc_label.setFont(QFont("Arial", 8))
+                desc_label.setStyleSheet("""
+                    QLabel {
+                        color: #6c757d;
+                        margin-left: 20px;
+                        background-color: #fdfdfe;
+                        padding: 5px;
+                        border-radius: 3px;
+                        border: 1px solid #e9ecef;
+                    }
+                """)
+                desc_label.setWordWrap(True)
+                desc_label.setMaximumWidth(400)
+                desc_label.setOpenExternalLinks(False)
+                option_layout.addWidget(desc_label)
+            
+            # Style the option widget
+            option_widget.setStyleSheet("""
+                QWidget {
+                    background-color: #ffffff;
+                    border: 1px solid #e9ecef;
+                    border-radius: 4px;
+                    margin: 2px 0px;
+                }
+                QWidget:hover {
+                    border-color: #9b59b6;
+                }
+            """)
+            
+            self.content_layout.addWidget(option_widget)
+        
+        # Initially hide the content widget
+        self.content_widget.setVisible(False)
+        layout.addWidget(self.content_widget)
+        
+        # Style the entire widget as a box
+        self.setStyleSheet("""
+            EnumFieldWidget {
+                background-color: #ffffff;
+                border: 1px solid #e9ecef;
+                border-radius: 8px;
+                margin: 3px 0px;
+            }
+            EnumFieldWidget:hover {
+                border-color: #9b59b6;
+            }
+        """)
+    
+    def on_option_selected(self, checked: bool, value_name: str):
+        """Handle when an enum option is selected."""
+        if checked:  # Only handle when option is selected (not deselected)
+            self.selected_value = value_name
+            self.value_label.setText(value_name)
+            self.value_label.setStyleSheet("""
+                QLabel {
+                    font-size: 10px;
+                    color: #9b59b6;
+                    font-weight: bold;
+                    padding: 4px 8px;
+                    background-color: #f4f1f8;
+                    border: 1px solid #9b59b6;
+                    border-radius: 3px;
+                    min-width: 120px;
+                }
+            """)
+            
+            # Emit the value change
+            self.value_changed.emit(self.field_name, value_name)
+            
+            # Update radio button styles to highlight selected
+            self.update_radio_button_styles()
+    
+    def update_radio_button_styles(self):
+        """Update radio button styles to highlight the selected one."""
+        for radio_button in self.radio_buttons:
+            if radio_button.isChecked():
+                radio_button.setStyleSheet("""
+                    QRadioButton {
+                        color: #9b59b6;
+                        font-weight: bold;
+                        background-color: #f4f1f8;
+                        padding: 2px;
+                        border-radius: 3px;
+                    }
+                """)
+            else:
+                radio_button.setStyleSheet("""
+                    QRadioButton {
+                        color: #2c3e50;
+                    }
+                    QRadioButton:hover {
+                        color: #9b59b6;
+                    }
+                """)
+    
+    def on_info_clicked(self):
+        """Handle info button click to toggle options visibility."""
+        self.is_expanded = self.info_button.isChecked()
+        self.content_widget.setVisible(self.is_expanded)
+    
+    def on_trash_clicked(self):
+        """Handle trash button click."""
+        # Clear selection and remove from config
+        self.button_group.setExclusive(False)  # Temporarily allow no selection
+        for radio_button in self.radio_buttons:
+            radio_button.setChecked(False)
+        self.button_group.setExclusive(True)  # Restore exclusive selection
+        
+        self.selected_value = None
+        self.value_label.setText("(no selection)")
+        self.value_label.setStyleSheet("""
+            QLabel {
+                font-size: 10px;
+                color: #7f8c8d;
+                font-style: italic;
+                padding: 4px 8px;
+                background-color: #f8f9fa;
+                border: 1px solid #e9ecef;
+                border-radius: 3px;
+                min-width: 120px;
+            }
+        """)
+        
+        self.update_radio_button_styles()
+        self.value_removed.emit(self.field_name)
+    
+    def set_value(self, value: str):
+        """Set the enum value programmatically."""
+        for radio_button in self.radio_buttons:
+            if radio_button.text() == value:
+                radio_button.setChecked(True)
+                self.selected_value = value
+                self.value_label.setText(value)
+                self.value_label.setStyleSheet("""
+                    QLabel {
+                        font-size: 10px;
+                        color: #9b59b6;
+                        font-weight: bold;
+                        padding: 4px 8px;
+                        background-color: #f4f1f8;
+                        border: 1px solid #9b59b6;
+                        border-radius: 3px;
+                        min-width: 120px;
+                    }
+                """)
+                self.is_set = True
+                self.trash_button.setEnabled(True)
+                self.update_radio_button_styles()
+                break
+    
+    def update_trash_button_state(self, is_in_config: bool):
+        """Update the trash button state based on whether field is in config dictionary."""
+        self.is_set = is_in_config
+        self.trash_button.setEnabled(is_in_config)
+    
+    def reset_to_default(self):
+        """Reset the field to its default state."""
+        # Clear all radio button selections
+        self.button_group.setExclusive(False)
+        for radio_button in self.radio_buttons:
+            radio_button.setChecked(False)
+        self.button_group.setExclusive(True)
+        
+        self.selected_value = None
+        self.value_label.setText("(no selection)")
+        self.value_label.setStyleSheet("""
+            QLabel {
+                font-size: 10px;
+                color: #7f8c8d;
+                font-style: italic;
+                padding: 4px 8px;
+                background-color: #f8f9fa;
+                border: 1px solid #e9ecef;
+                border-radius: 3px;
+                min-width: 120px;
+            }
+        """)
+        self.update_radio_button_styles()
+
+
 class ClangFormatUI(QMainWindow):
     """Main window for the Clang-Format UI application."""
     
@@ -1041,7 +1421,15 @@ int main() {
             if field.get('type') in ['std::string', 'std::vector<std::string>']
         ]
         
-        print(f"Creating widgets for {len(boolean_fields)} boolean fields, {len(integer_fields)} integer fields, and {len(string_fields)} string fields")
+        # Get list of known basic types
+        basic_types = {'bool', 'int', 'unsigned', 'std::optional<unsigned>', 'std::string', 'std::vector<std::string>'}
+        
+        enum_fields = [
+            field for field in self.format_data.get('fields', [])
+            if field.get('type') not in basic_types and field.get('type') in self.format_data.get('enum_definitions', {})
+        ]
+        
+        print(f"Creating widgets for {len(boolean_fields)} boolean fields, {len(integer_fields)} integer fields, {len(string_fields)} string fields, and {len(enum_fields)} enum fields")
         
         # Create boolean section
         if boolean_fields:
@@ -1117,17 +1505,43 @@ int main() {
                 self.field_widgets.append(widget)
                 self.config_layout.addWidget(widget)
         
+        # Create enum section
+        if enum_fields:
+            enum_header = QLabel(f"Enum Options ({len(enum_fields)} fields)")
+            enum_header.setStyleSheet("""
+                QLabel {
+                    font-size: 14px;
+                    font-weight: bold;
+                    color: #2c3e50;
+                    padding: 10px 5px;
+                    border-bottom: 1px solid #9b59b6;
+                    margin-bottom: 10px;
+                    margin-top: 15px;
+                    background-color: #f4f1f8;
+                }
+            """)
+            self.config_layout.addWidget(enum_header)
+            
+            # Create widgets for each enum field
+            for field in enum_fields:
+                widget = EnumFieldWidget(field, self.format_data.get('enum_definitions', {}))
+                widget.value_changed.connect(self.on_enum_value_changed)
+                widget.value_removed.connect(self.on_field_value_removed)
+                self.field_widgets.append(widget)
+                self.config_layout.addWidget(widget)
+        
         # Add stretch to push content to top
         self.config_layout.addStretch()
         
         # Show some statistics
         total_fields = len(self.format_data.get('fields', []))
-        other_fields = total_fields - len(boolean_fields) - len(integer_fields) - len(string_fields)
+        other_fields = total_fields - len(boolean_fields) - len(integer_fields) - len(string_fields) - len(enum_fields)
         
         stats_label = QLabel(f"Total fields: {total_fields}\n"
                            f"Boolean fields: {len(boolean_fields)}\n"
                            f"Integer fields: {len(integer_fields)}\n"
                            f"String fields: {len(string_fields)}\n"
+                           f"Enum fields: {len(enum_fields)}\n"
                            f"Other types: {other_fields}")
         stats_label.setStyleSheet("""
             QLabel {
@@ -1201,6 +1615,19 @@ int main() {
         print(f"Set string {field_name} = {value_str}")
         print(f"Current config has {len(self.config_values)} values")
     
+    def on_enum_value_changed(self, field_name: str, value: str):
+        """Handle when an enum field value is changed."""
+        # Always add to config dictionary when enum selection changes
+        self.config_values[field_name] = value
+        
+        # Update trash button state for this field
+        widget = self.get_field_widget(field_name)
+        if widget:
+            widget.update_trash_button_state(True)  # Field is now in config
+        
+        print(f"Set enum {field_name} = {value}")
+        print(f"Current config has {len(self.config_values)} values")
+    
     def on_field_value_removed(self, field_name: str):
         """Handle when a field value is removed."""
         if field_name in self.config_values:
@@ -1216,7 +1643,7 @@ int main() {
             print(f"Current config has {len(self.config_values)} values")
     
     def get_field_widget(self, field_name: str):
-        """Get the widget for a specific field name (returns BooleanFieldWidget or IntegerFieldWidget)."""
+        """Get the widget for a specific field name (returns BooleanFieldWidget, IntegerFieldWidget, StringFieldWidget, or EnumFieldWidget)."""
         for widget in self.field_widgets:
             if widget.field_name == field_name:
                 return widget
