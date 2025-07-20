@@ -14,7 +14,7 @@ from typing import Dict, Any, List
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QScrollArea, QTextEdit, QSplitter, QLabel, QFrame, QCheckBox,
-    QPushButton, QGroupBox, QSpinBox
+    QPushButton, QGroupBox, QSpinBox, QLineEdit
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QIcon
@@ -553,6 +553,239 @@ class IntegerFieldWidget(QWidget):
             self.optional_checkbox.stateChanged.connect(self.on_optional_changed)
 
 
+class StringFieldWidget(QWidget):
+    """Widget for string and vector<string> configuration fields."""
+    
+    value_changed = Signal(str, object)  # field_name, value (string or list)
+    value_removed = Signal(str)  # field_name
+    
+    def __init__(self, field_data: Dict[str, Any], parent=None):
+        super().__init__(parent)
+        self.field_name = field_data["name"]
+        self.field_data = field_data
+        self.field_type = field_data.get("type", "std::string")
+        self.is_vector = "vector" in self.field_type.lower()
+        self.is_set = False  # Track if this field is currently set in config
+        
+        self.init_ui()
+    
+    def init_ui(self):
+        """Initialize the widget UI."""
+        # Main vertical layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+        
+        # Top row: field name, input field, and buttons
+        top_layout = QHBoxLayout()
+        
+        # Field name label
+        self.name_label = QLabel(self.field_name)
+        self.name_label.setFont(QFont("Arial", 10, QFont.Bold))
+        self.name_label.setMinimumWidth(200)  # Ensure consistent spacing
+        top_layout.addWidget(self.name_label)
+        
+        # String input field
+        self.line_edit = QLineEdit()
+        self.line_edit.setPlaceholderText(
+            "Enter comma-separated values..." if self.is_vector 
+            else "Enter string value..."
+        )
+        self.line_edit.textChanged.connect(self.on_text_changed)
+        self.line_edit.setStyleSheet("""
+            QLineEdit {
+                padding: 6px;
+                border: 1px solid #bdc3c7;
+                border-radius: 3px;
+                background-color: white;
+                font-size: 10px;
+                font-family: monospace;
+            }
+            QLineEdit:focus {
+                border-color: #3498db;
+            }
+            QLineEdit:disabled {
+                background-color: #f8f9fa;
+                color: #6c757d;
+            }
+        """)
+        top_layout.addWidget(self.line_edit)
+        
+        # Type indicator label
+        type_text = "vector<string>" if self.is_vector else "string"
+        
+        self.type_label = QLabel(f"({type_text})")
+        self.type_label.setStyleSheet("""
+            QLabel {
+                font-size: 8px;
+                color: #6c757d;
+                font-style: italic;
+                margin-left: 5px;
+            }
+        """)
+        top_layout.addWidget(self.type_label)
+        
+        # Spacer
+        top_layout.addStretch()
+        
+        # Info button (toggles description visibility)
+        self.info_button = QPushButton("ℹ")
+        self.info_button.setFixedSize(30, 30)
+        self.info_button.setToolTip("Show/hide description")
+        self.info_button.setCheckable(True)  # Make it toggleable
+        self.info_button.setChecked(False)  # Initially unchecked (description hidden)
+        self.info_button.clicked.connect(self.on_info_clicked)
+        self.info_button.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 15px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+            QPushButton:checked {
+                background-color: #27ae60;
+            }
+            QPushButton:checked:hover {
+                background-color: #219a52;
+            }
+        """)
+        top_layout.addWidget(self.info_button)
+        
+        # Trash button
+        self.trash_button = QPushButton("🗑")
+        self.trash_button.setFixedSize(30, 30)
+        self.trash_button.setToolTip("Remove this setting")
+        self.trash_button.setEnabled(False)  # Initially disabled
+        self.trash_button.clicked.connect(self.on_trash_clicked)
+        self.trash_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                border: none;
+                border-radius: 15px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+            QPushButton:disabled {
+                background-color: #bdc3c7;
+                color: #7f8c8d;
+            }
+        """)
+        top_layout.addWidget(self.trash_button)
+        
+        layout.addLayout(top_layout)
+        
+        # Help text for vector fields
+        if self.is_vector:
+            help_label = QLabel("💡 Separate multiple values with commas (e.g., value1, value2, value3)")
+            help_label.setStyleSheet("""
+                QLabel {
+                    font-size: 8px;
+                    color: #7f8c8d;
+                    font-style: italic;
+                    margin-left: 20px;
+                    margin-top: 2px;
+                }
+            """)
+            layout.addWidget(help_label)
+        
+        # Description label with rich text support
+        raw_description = self.field_data["description"]
+        formatted_description = DoxygenParser.parse_to_html(raw_description)
+        
+        self.description_label = QLabel()
+        self.description_label.setTextFormat(Qt.RichText)  # Enable rich text
+        self.description_label.setText(formatted_description)
+        self.description_label.setFont(QFont("Arial", 10))
+        self.description_label.setStyleSheet("""
+            QLabel {
+                color: #2c3e50;
+                margin-left: 20px;
+                background-color: #f8f9fa;
+                padding: 8px;
+                border-radius: 4px;
+                border: 1px solid #e9ecef;
+            }
+        """)
+        self.description_label.setWordWrap(True)
+        self.description_label.setMaximumWidth(450)  # Slightly wider for formatted content
+        self.description_label.setVisible(False)  # Initially hidden
+        self.description_label.setOpenExternalLinks(False)  # Security: don't open external links
+        layout.addWidget(self.description_label)
+        
+        # Style the entire widget as a box
+        self.setStyleSheet("""
+            StringFieldWidget {
+                background-color: #ffffff;
+                border: 1px solid #e9ecef;
+                border-radius: 8px;
+                margin: 3px 0px;
+            }
+            StringFieldWidget:hover {
+                border-color: #27ae60;
+            }
+        """)
+    
+    def on_text_changed(self, text):
+        """Handle text input change."""
+        # Only emit value if there's actually text (non-empty after strip)
+        text = text.strip()
+        if text:
+            if self.is_vector:
+                # Split by comma and trim each value
+                values = [item.strip() for item in text.split(',') if item.strip()]
+                self.value_changed.emit(self.field_name, values)
+            else:
+                # Single string value
+                self.value_changed.emit(self.field_name, text)
+        else:
+            # Empty text means remove the field
+            self.value_removed.emit(self.field_name)
+    
+    def on_info_clicked(self):
+        """Handle info button click to toggle description visibility."""
+        is_checked = self.info_button.isChecked()
+        self.description_label.setVisible(is_checked)
+    
+    def on_trash_clicked(self):
+        """Handle trash button click."""
+        # Clear the input and remove from config
+        self.line_edit.clear()
+        self.value_removed.emit(self.field_name)
+    
+    def set_value(self, value):
+        """Set the input value programmatically."""
+        if self.is_vector and isinstance(value, list):
+            # Join list values with comma and space
+            text = ", ".join(str(v) for v in value)
+        else:
+            # Single string value
+            text = str(value) if value is not None else ""
+        
+        self.line_edit.setText(text)
+        self.is_set = bool(text.strip())
+        self.trash_button.setEnabled(self.is_set)
+    
+    def update_trash_button_state(self, is_in_config: bool):
+        """Update the trash button state based on whether field is in config dictionary."""
+        self.is_set = is_in_config
+        self.trash_button.setEnabled(is_in_config)
+    
+    def reset_to_default(self):
+        """Reset the field to its default state."""
+        # Temporarily disconnect the signal to avoid triggering value_changed
+        self.line_edit.textChanged.disconnect()
+        self.line_edit.clear()  # Default state is empty
+        # Reconnect the signal
+        self.line_edit.textChanged.connect(self.on_text_changed)
+
+
 class ClangFormatUI(QMainWindow):
     """Main window for the Clang-Format UI application."""
     
@@ -803,7 +1036,12 @@ int main() {
             if field.get('type') in ['int', 'unsigned', 'std::optional<unsigned>']
         ]
         
-        print(f"Creating widgets for {len(boolean_fields)} boolean fields and {len(integer_fields)} integer fields")
+        string_fields = [
+            field for field in self.format_data.get('fields', [])
+            if field.get('type') in ['std::string', 'std::vector<std::string>']
+        ]
+        
+        print(f"Creating widgets for {len(boolean_fields)} boolean fields, {len(integer_fields)} integer fields, and {len(string_fields)} string fields")
         
         # Create boolean section
         if boolean_fields:
@@ -854,16 +1092,42 @@ int main() {
                 self.field_widgets.append(widget)
                 self.config_layout.addWidget(widget)
         
+        # Create string section
+        if string_fields:
+            string_header = QLabel(f"String Options ({len(string_fields)} fields)")
+            string_header.setStyleSheet("""
+                QLabel {
+                    font-size: 14px;
+                    font-weight: bold;
+                    color: #2c3e50;
+                    padding: 10px 5px;
+                    border-bottom: 1px solid #27ae60;
+                    margin-bottom: 10px;
+                    margin-top: 15px;
+                    background-color: #e8f8f5;
+                }
+            """)
+            self.config_layout.addWidget(string_header)
+            
+            # Create widgets for each string field
+            for field in string_fields:
+                widget = StringFieldWidget(field)
+                widget.value_changed.connect(self.on_string_value_changed)
+                widget.value_removed.connect(self.on_field_value_removed)
+                self.field_widgets.append(widget)
+                self.config_layout.addWidget(widget)
+        
         # Add stretch to push content to top
         self.config_layout.addStretch()
         
         # Show some statistics
         total_fields = len(self.format_data.get('fields', []))
-        other_fields = total_fields - len(boolean_fields) - len(integer_fields)
+        other_fields = total_fields - len(boolean_fields) - len(integer_fields) - len(string_fields)
         
         stats_label = QLabel(f"Total fields: {total_fields}\n"
                            f"Boolean fields: {len(boolean_fields)}\n"
                            f"Integer fields: {len(integer_fields)}\n"
+                           f"String fields: {len(string_fields)}\n"
                            f"Other types: {other_fields}")
         stats_label.setStyleSheet("""
             QLabel {
@@ -921,6 +1185,20 @@ int main() {
             widget.update_trash_button_state(True)  # Field is now in config
         
         print(f"Set integer {field_name} = {value}")
+        print(f"Current config has {len(self.config_values)} values")
+    
+    def on_string_value_changed(self, field_name: str, value):
+        """Handle when a string field value is changed."""
+        # Always add to config dictionary when text changes
+        self.config_values[field_name] = value
+        
+        # Update trash button state for this field
+        widget = self.get_field_widget(field_name)
+        if widget:
+            widget.update_trash_button_state(True)  # Field is now in config
+        
+        value_str = f"[{', '.join(value)}]" if isinstance(value, list) else f'"{value}"'
+        print(f"Set string {field_name} = {value_str}")
         print(f"Current config has {len(self.config_values)} values")
     
     def on_field_value_removed(self, field_name: str):
