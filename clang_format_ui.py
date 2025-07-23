@@ -10,6 +10,11 @@ import sys
 import json
 import re
 import yaml
+import tempfile
+import subprocess
+import threading
+import time
+import argparse
 from pathlib import Path
 from typing import Dict, Any, List
 
@@ -19,7 +24,7 @@ from PySide6.QtWidgets import (
     QPushButton, QGroupBox, QSpinBox, QLineEdit, QRadioButton, QButtonGroup,
     QMenuBar, QMenu, QFileDialog, QMessageBox
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QIcon, QAction
 import re
 
@@ -1537,7 +1542,7 @@ class StructFieldWidget(QWidget):
 class ClangFormatUI(QMainWindow):
     """Main window for the Clang-Format UI application."""
     
-    def __init__(self):
+    def __init__(self, clang_format_binary: str = "clang-format"):
         super().__init__()
         self.format_data: Dict[str, Any] = {}
         self.config_values: Dict[str, Any] = {}  # Store current configuration values
@@ -1545,8 +1550,18 @@ class ClangFormatUI(QMainWindow):
         self.current_file_path: str = ""  # Track currently loaded file
         self.is_modified: bool = False  # Track if current config has unsaved changes
         self.is_quitting: bool = False  # Track if we're in the quit process
+        self.clang_format_binary: str = clang_format_binary  # Path to clang-format binary
+        
+        # Timer for debouncing format updates
+        self.format_timer = QTimer()
+        self.format_timer.setSingleShot(True)
+        self.format_timer.timeout.connect(self.format_code_preview)
+        self.format_timer.setInterval(500)  # 500ms delay
+        
         self.init_ui()
         self.load_format_data()
+        # Initial formatting
+        self.schedule_format_update()
         
     def init_ui(self):
         """Initialize the user interface."""
@@ -1652,6 +1667,9 @@ class ClangFormatUI(QMainWindow):
         right_layout.setContentsMargins(10, 10, 10, 10)
         right_layout.setSpacing(10)
         
+        # Header with title and status
+        header_layout = QHBoxLayout()
+        
         # Title for right column
         title_label = QLabel("C++ Code Preview")
         title_label.setStyleSheet("""
@@ -1660,11 +1678,33 @@ class ClangFormatUI(QMainWindow):
                 font-weight: bold;
                 color: #2c3e50;
                 padding: 5px;
-                border-bottom: 2px solid #e74c3c;
-                margin-bottom: 10px;
             }
         """)
-        right_layout.addWidget(title_label)
+        header_layout.addWidget(title_label)
+        
+        # Status label for formatting feedback
+        self.format_status_label = QLabel("Ready")
+        self.format_status_label.setStyleSheet("""
+            QLabel {
+                font-size: 12px;
+                color: #27ae60;
+                padding: 5px 10px;
+                background-color: #d5f4e6;
+                border-radius: 3px;
+                border: 1px solid #27ae60;
+            }
+        """)
+        header_layout.addStretch()
+        header_layout.addWidget(self.format_status_label)
+        
+        right_layout.addLayout(header_layout)
+        
+        # Separator line
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        separator.setStyleSheet("color: #e74c3c;")
+        right_layout.addWidget(separator)
         
         # Text editor for code preview
         self.code_editor = QTextEdit()
@@ -1691,6 +1731,20 @@ class ClangFormatUI(QMainWindow):
         """)
         
         right_layout.addWidget(self.code_editor)
+        
+        # Info label
+        info_label = QLabel("💡 Code preview updates automatically as you change formatting options")
+        info_label.setStyleSheet("""
+            QLabel {
+                font-size: 10px;
+                color: #7f8c8d;
+                font-style: italic;
+                padding: 5px;
+                background-color: #f8f9fa;
+                border-radius: 3px;
+            }
+        """)
+        right_layout.addWidget(info_label)
         
         parent.addWidget(right_frame)
         
@@ -1802,6 +1856,21 @@ int main() {
         quit_action.setStatusTip('Exit the application')
         quit_action.triggered.connect(self.quit_application)
         file_menu.addAction(quit_action)
+        
+        # Tools menu
+        tools_menu = menubar.addMenu('&Tools')
+        
+        # Set clang-format binary action
+        set_binary_action = QAction('Set clang-format &Binary...', self)
+        set_binary_action.setStatusTip('Set the path to the clang-format binary')
+        set_binary_action.triggered.connect(self.set_clang_format_binary_dialog)
+        tools_menu.addAction(set_binary_action)
+        
+        # Test clang-format action
+        test_binary_action = QAction('&Test clang-format', self)
+        test_binary_action.setStatusTip('Test if clang-format binary is working')
+        test_binary_action.triggered.connect(self.test_clang_format_binary)
+        tools_menu.addAction(test_binary_action)
         
     def load_format_data(self):
         """Load format style data from JSON file."""
@@ -2041,6 +2110,9 @@ int main() {
         # Mark as modified
         self.mark_as_modified()
         
+        # Schedule format update
+        self.schedule_format_update()
+        
         print(f"Set boolean {field_name} = {value}")
         print(f"Current config has {len(self.config_values)} values")
     
@@ -2057,6 +2129,9 @@ int main() {
         # Mark as modified
         self.mark_as_modified()
         
+        # Schedule format update
+        self.schedule_format_update()
+        
         print(f"Set integer {field_name} = {value}")
         print(f"Current config has {len(self.config_values)} values")
     
@@ -2072,6 +2147,9 @@ int main() {
         
         # Mark as modified
         self.mark_as_modified()
+        
+        # Schedule format update
+        self.schedule_format_update()
         
         value_str = f"[{', '.join(value)}]" if isinstance(value, list) else f'"{value}"'
         print(f"Set string {field_name} = {value_str}")
@@ -2090,6 +2168,9 @@ int main() {
         # Mark as modified
         self.mark_as_modified()
         
+        # Schedule format update
+        self.schedule_format_update()
+        
         print(f"Set enum {field_name} = {value}")
         print(f"Current config has {len(self.config_values)} values")
     
@@ -2105,6 +2186,9 @@ int main() {
         
         # Mark as modified
         self.mark_as_modified()
+        
+        # Schedule format update
+        self.schedule_format_update()
         
         print(f"Set struct {field_name} = {struct_dict}")
         print(f"Current config has {len(self.config_values)} values")
@@ -2122,6 +2206,9 @@ int main() {
             
             # Mark as modified
             self.mark_as_modified()
+            
+            # Schedule format update
+            self.schedule_format_update()
             
             print(f"Removed {field_name}")
             print(f"Current config has {len(self.config_values)} values")
@@ -2261,6 +2348,9 @@ int main() {
         self.is_modified = False
         self.update_window_title()
         
+        # Schedule format update
+        self.schedule_format_update()
+        
         print(f"Loaded {len(yaml_content)} configuration values from {file_path}")
     
     def save_clang_format_file(self, file_path: str):
@@ -2369,10 +2459,219 @@ int main() {
         
         # If we get here, it's safe to close
         event.accept()
+    
+    def set_clang_format_binary_dialog(self):
+        """Show dialog to set the clang-format binary path."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            'Select clang-format binary',
+            self.clang_format_binary,
+            'Executable files (clang-format*);;All files (*)'
+        )
+        
+        if file_path:
+            self.set_clang_format_binary(file_path)
+            QMessageBox.information(
+                self,
+                'Binary Updated',
+                f'clang-format binary set to:\n{file_path}\n\nCode preview will update automatically.'
+            )
+    
+    def test_clang_format_binary(self):
+        """Test if the clang-format binary is working."""
+        try:
+            result = subprocess.run([
+                self.clang_format_binary, '--version'
+            ], capture_output=True, text=True, timeout=5, encoding='utf-8')
+            
+            if result.returncode == 0:
+                version_info = result.stdout.strip()
+                QMessageBox.information(
+                    self,
+                    'clang-format Test',
+                    f'✓ clang-format is working!\n\nBinary: {self.clang_format_binary}\nVersion: {version_info}'
+                )
+            else:
+                error_msg = result.stderr or "Unknown error"
+                QMessageBox.warning(
+                    self,
+                    'clang-format Test Failed',
+                    f'⚠ clang-format returned an error:\n{error_msg}\n\nBinary: {self.clang_format_binary}'
+                )
+                
+        except subprocess.TimeoutExpired:
+            QMessageBox.warning(
+                self,
+                'clang-format Test Failed',
+                f'⚠ clang-format process timed out.\n\nBinary: {self.clang_format_binary}'
+            )
+            
+        except FileNotFoundError:
+            QMessageBox.critical(
+                self,
+                'clang-format Not Found',
+                f'⚠ clang-format binary not found:\n{self.clang_format_binary}\n\nPlease check the path or install clang-format.'
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                'clang-format Test Error',
+                f'⚠ Unexpected error testing clang-format:\n{str(e)}\n\nBinary: {self.clang_format_binary}'
+            )
+    
+    def schedule_format_update(self):
+        """Schedule a format update after a short delay to debounce rapid changes."""
+        self.format_timer.stop()  # Cancel any pending update
+        self.format_timer.start()  # Start new delay
+    
+    def format_code_preview(self):
+        """Format the sample C++ code using current configuration and update the preview."""
+        try:
+            # Get current sample code
+            sample_code = self.get_sample_code()
+            
+            # Create temporary config file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.clang-format', delete=False, encoding='utf-8') as config_file:
+                # Create YAML content from current config values
+                yaml_content = dict(self.config_values)
+                
+                # Always add Language: Cpp if not specified
+                if 'Language' not in yaml_content:
+                    yaml_content = {'Language': 'Cpp', **yaml_content}
+                
+                # Write YAML content
+                config_file.write('---\n')
+                yaml_str = yaml.dump(
+                    yaml_content,
+                    default_flow_style=False,
+                    sort_keys=False,
+                    allow_unicode=True,
+                    width=1000
+                )
+                config_file.write(yaml_str)
+                config_file.write('...\n')
+                config_file_path = config_file.name
+            
+            # Create temporary source file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.cpp', delete=False, encoding='utf-8') as source_file:
+                source_file.write(sample_code)
+                source_file_path = source_file.name
+            
+            # Run clang-format
+            try:
+                result = subprocess.run([
+                    self.clang_format_binary,
+                    f'--style=file:{config_file_path}',
+                    source_file_path
+                ], capture_output=True, text=True, timeout=10, encoding='utf-8')
+                
+                if result.returncode == 0:
+                    # Successfully formatted
+                    formatted_code = result.stdout
+                    self.code_editor.setPlainText(formatted_code)
+                    
+                    # Update status in title bar or status area
+                    self.update_format_status("✓ Code formatted successfully")
+                else:
+                    # Error during formatting
+                    error_msg = result.stderr or "Unknown formatting error"
+                    self.update_format_status(f"⚠ Formatting error: {error_msg[:100]}")
+                    print(f"clang-format error: {error_msg}")
+                    
+                    # Show original code with error annotation
+                    error_annotation = f"// Formatting error: {error_msg}\n\n"
+                    self.code_editor.setPlainText(error_annotation + sample_code)
+                    
+            except subprocess.TimeoutExpired:
+                self.update_format_status("⚠ Formatting timeout")
+                print("clang-format process timed out")
+                self.code_editor.setPlainText("// Formatting timed out\n\n" + sample_code)
+                
+            except FileNotFoundError:
+                self.update_format_status(f"⚠ clang-format not found: {self.clang_format_binary}")
+                print(f"clang-format binary not found: {self.clang_format_binary}")
+                self.code_editor.setPlainText(f"// clang-format not found: {self.clang_format_binary}\n\n" + sample_code)
+                
+            except Exception as e:
+                self.update_format_status(f"⚠ Error: {str(e)[:50]}")
+                print(f"Unexpected error during formatting: {e}")
+                self.code_editor.setPlainText(f"// Error: {str(e)}\n\n" + sample_code)
+            
+            # Clean up temporary files
+            try:
+                Path(config_file_path).unlink()
+                Path(source_file_path).unlink()
+            except Exception as e:
+                print(f"Warning: Could not clean up temporary files: {e}")
+                
+        except Exception as e:
+            print(f"Error in format_code_preview: {e}")
+            self.update_format_status(f"⚠ Preview error: {str(e)[:50]}")
+    
+    def update_format_status(self, message: str):
+        """Update the formatting status in the UI."""
+        print(f"Format status: {message}")
+        
+        # Update status label with appropriate styling
+        if hasattr(self, 'format_status_label'):
+            self.format_status_label.setText(message)
+            
+            # Style based on message type
+            if message.startswith("✓"):
+                # Success
+                self.format_status_label.setStyleSheet("""
+                    QLabel {
+                        font-size: 12px;
+                        color: #27ae60;
+                        padding: 5px 10px;
+                        background-color: #d5f4e6;
+                        border-radius: 3px;
+                        border: 1px solid #27ae60;
+                    }
+                """)
+            elif message.startswith("⚠"):
+                # Warning/Error
+                self.format_status_label.setStyleSheet("""
+                    QLabel {
+                        font-size: 12px;
+                        color: #e74c3c;
+                        padding: 5px 10px;
+                        background-color: #fdf2f2;
+                        border-radius: 3px;
+                        border: 1px solid #e74c3c;
+                    }
+                """)
+            else:
+                # Default/Info
+                self.format_status_label.setStyleSheet("""
+                    QLabel {
+                        font-size: 12px;
+                        color: #3498db;
+                        padding: 5px 10px;
+                        background-color: #ebf3fd;
+                        border-radius: 3px;
+                        border: 1px solid #3498db;
+                    }
+                """)
+    
+    def set_clang_format_binary(self, binary_path: str):
+        """Set the path to the clang-format binary and trigger a format update."""
+        self.clang_format_binary = binary_path
+        self.schedule_format_update()
 
 
 def main():
     """Main application entry point."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Clang-Format Configuration UI')
+    parser.add_argument(
+        '--clang-format-binary', 
+        default='clang-format',
+        help='Path to clang-format binary (default: clang-format from PATH)'
+    )
+    args = parser.parse_args()
+    
     app = QApplication(sys.argv)
     
     # Set application properties
@@ -2381,7 +2680,7 @@ def main():
     app.setOrganizationName("Development Tools")
     
     # Create and show main window
-    window = ClangFormatUI()
+    window = ClangFormatUI(clang_format_binary=args.clang_format_binary)
     window.show()
     
     # Start event loop
