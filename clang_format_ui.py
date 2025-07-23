@@ -8,6 +8,7 @@ options based on the FormatStyle struct from LLVM's Format.h.
 
 import sys
 import json
+import re
 from pathlib import Path
 from typing import Dict, Any, List
 
@@ -1166,6 +1167,371 @@ class EnumFieldWidget(QWidget):
         self.update_radio_button_styles()
 
 
+class StructFieldWidget(QWidget):
+    """Widget for custom struct configuration fields."""
+    
+    value_changed = Signal(str, dict)  # field_name, struct_dict
+    value_removed = Signal(str)  # field_name
+    
+    def __init__(self, field_data: Dict[str, Any], struct_data: Dict[str, Any], format_data: Dict[str, Any], parent=None):
+        super().__init__(parent)
+        self.field_name = field_data["name"]
+        self.field_data = field_data
+        self.struct_type = field_data.get("type", "")
+        self.struct_definition = struct_data.get(self.struct_type, {})
+        self.struct_fields = self.struct_definition.get("fields", [])
+        self.format_data = format_data  # Full format data for nested lookups
+        self.selected_values = {}  # Track selected values for each field
+        self.is_set = False
+        self.is_expanded = False  # Track if struct options are visible
+        
+        # Track nested field widgets
+        self.nested_widgets = []
+        
+        self.init_ui()
+    
+    def init_ui(self):
+        """Initialize the widget UI."""
+        # Main vertical layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+        
+        # Top row: field name, current status, and buttons
+        top_layout = QHBoxLayout()
+        
+        # Field name label
+        self.name_label = QLabel(self.field_name)
+        self.name_label.setFont(QFont("Arial", 10, QFont.Bold))
+        self.name_label.setMinimumWidth(200)  # Ensure consistent spacing
+        top_layout.addWidget(self.name_label)
+        
+        # Current status label
+        self.status_label = QLabel(f"({len(self.selected_values)} of {len(self.struct_fields)} set)")
+        self.status_label.setStyleSheet("""
+            QLabel {
+                font-size: 10px;
+                color: #7f8c8d;
+                font-style: italic;
+                padding: 4px 8px;
+                background-color: #f8f9fa;
+                border: 1px solid #e9ecef;
+                border-radius: 3px;
+                min-width: 120px;
+            }
+        """)
+        top_layout.addWidget(self.status_label)
+        
+        # Type indicator label
+        self.type_label = QLabel(f"({self.struct_type})")
+        self.type_label.setStyleSheet("""
+            QLabel {
+                font-size: 8px;
+                color: #6c757d;
+                font-style: italic;
+                margin-left: 5px;
+            }
+        """)
+        top_layout.addWidget(self.type_label)
+        
+        # Spacer
+        top_layout.addStretch()
+        
+        # Info button (toggles description and struct fields visibility)
+        self.info_button = QPushButton("ℹ")
+        self.info_button.setFixedSize(30, 30)
+        self.info_button.setToolTip("Show/hide struct fields and description")
+        self.info_button.setCheckable(True)  # Make it toggleable
+        self.info_button.setChecked(False)  # Initially unchecked (fields hidden)
+        self.info_button.clicked.connect(self.on_info_clicked)
+        self.info_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e67e22;
+                color: white;
+                border: none;
+                border-radius: 15px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #d35400;
+            }
+            QPushButton:checked {
+                background-color: #27ae60;
+            }
+            QPushButton:checked:hover {
+                background-color: #219a52;
+            }
+        """)
+        top_layout.addWidget(self.info_button)
+        
+        # Trash button
+        self.trash_button = QPushButton("🗑")
+        self.trash_button.setFixedSize(30, 30)
+        self.trash_button.setToolTip("Remove this setting")
+        self.trash_button.setEnabled(False)  # Initially disabled
+        self.trash_button.clicked.connect(self.on_trash_clicked)
+        self.trash_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                border: none;
+                border-radius: 15px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+            QPushButton:disabled {
+                background-color: #bdc3c7;
+                color: #7f8c8d;
+            }
+        """)
+        top_layout.addWidget(self.trash_button)
+        
+        layout.addLayout(top_layout)
+        
+        # Container for struct description and fields (initially hidden)
+        self.content_widget = QWidget()
+        self.content_layout = QVBoxLayout(self.content_widget)
+        self.content_layout.setContentsMargins(10, 10, 10, 10)
+        self.content_layout.setSpacing(8)
+        
+        # Struct description (field description)
+        if self.field_data.get("description"):
+            raw_description = self.field_data["description"]
+            formatted_description = DoxygenParser.parse_to_html(raw_description)
+            
+            self.description_label = QLabel()
+            self.description_label.setTextFormat(Qt.RichText)
+            self.description_label.setText(formatted_description)
+            self.description_label.setFont(QFont("Arial", 10))
+            self.description_label.setStyleSheet("""
+                QLabel {
+                    color: #2c3e50;
+                    background-color: #f8f9fa;
+                    padding: 8px;
+                    border-radius: 4px;
+                    border: 1px solid #e9ecef;
+                    margin-bottom: 10px;
+                }
+            """)
+            self.description_label.setWordWrap(True)
+            self.description_label.setMaximumWidth(450)
+            self.description_label.setOpenExternalLinks(False)
+            self.content_layout.addWidget(self.description_label)
+        
+        # Struct fields section
+        fields_header = QLabel(f"Struct Fields ({len(self.struct_fields)} fields):")
+        fields_header.setFont(QFont("Arial", 9, QFont.Bold))
+        fields_header.setStyleSheet("""
+            QLabel {
+                color: #2c3e50;
+                margin-bottom: 5px;
+                border-bottom: 1px solid #e67e22;
+                padding-bottom: 2px;
+            }
+        """)
+        self.content_layout.addWidget(fields_header)
+        
+        # Create nested widgets for each struct field in definition order
+        for struct_field in self.struct_fields:
+            self.create_nested_field_widget(struct_field)
+        
+        # Initially hide the content widget
+        self.content_widget.setVisible(False)
+        layout.addWidget(self.content_widget)
+        
+        # Style the entire widget as a box
+        self.setStyleSheet("""
+            StructFieldWidget {
+                background-color: #ffffff;
+                border: 1px solid #e9ecef;
+                border-radius: 8px;
+                margin: 3px 0px;
+            }
+            StructFieldWidget:hover {
+                border-color: #e67e22;
+            }
+        """)
+    
+    def create_nested_field_widget(self, struct_field: Dict[str, Any]):
+        """Create a nested widget for a struct field."""
+        field_type = struct_field.get("type", "")
+        field_name = struct_field.get("name", "")
+        
+        # Create widget container
+        field_container = QWidget()
+        field_layout = QVBoxLayout(field_container)
+        field_layout.setContentsMargins(5, 5, 5, 5)
+        field_layout.setSpacing(3)
+        
+        # Determine widget type and create appropriate widget
+        widget = None
+        
+        if field_type == "bool":
+            widget = BooleanFieldWidget(struct_field)
+            widget.value_changed.connect(lambda name, value: self.on_nested_value_changed(name, value))
+            widget.value_removed.connect(lambda name: self.on_nested_value_removed(name))
+        elif field_type in ['int', 'unsigned', 'std::optional<unsigned>']:
+            widget = IntegerFieldWidget(struct_field)
+            widget.value_changed.connect(lambda name, value: self.on_nested_value_changed(name, value))
+            widget.value_removed.connect(lambda name: self.on_nested_value_removed(name))
+        elif field_type in ['std::string', 'std::vector<std::string>']:
+            widget = StringFieldWidget(struct_field)
+            widget.value_changed.connect(lambda name, value: self.on_nested_value_changed(name, value))
+            widget.value_removed.connect(lambda name: self.on_nested_value_removed(name))
+        elif field_type in self.format_data.get('enum_definitions', {}):
+            widget = EnumFieldWidget(struct_field, self.format_data.get('enum_definitions', {}))
+            widget.value_changed.connect(lambda name, value: self.on_nested_value_changed(name, value))
+            widget.value_removed.connect(lambda name: self.on_nested_value_removed(name))
+        elif field_type in self.format_data.get('struct_definitions', {}):
+            widget = StructFieldWidget(struct_field, self.format_data.get('struct_definitions', {}), self.format_data)
+            widget.value_changed.connect(lambda name, value: self.on_nested_value_changed(name, value))
+            widget.value_removed.connect(lambda name: self.on_nested_value_removed(name))
+        
+        if widget:
+            # Style the nested widget with slightly different appearance
+            widget.setStyleSheet("""
+                QWidget {
+                    background-color: #fdfdfe;
+                    border: 1px solid #ecf0f1;
+                    border-radius: 4px;
+                    margin: 1px;
+                }
+                QWidget:hover {
+                    border-color: #e67e22;
+                }
+            """)
+            
+            field_layout.addWidget(widget)
+            self.nested_widgets.append(widget)
+            self.content_layout.addWidget(field_container)
+        else:
+            # For unsupported field types, show a placeholder
+            placeholder_label = QLabel(f"{field_name}: {field_type} (unsupported)")
+            placeholder_label.setStyleSheet("""
+                QLabel {
+                    color: #7f8c8d;
+                    font-style: italic;
+                    padding: 8px;
+                    background-color: #f8f9fa;
+                    border: 1px solid #e9ecef;
+                    border-radius: 3px;
+                }
+            """)
+            field_layout.addWidget(placeholder_label)
+            self.content_layout.addWidget(field_container)
+    
+    def on_nested_value_changed(self, field_name: str, value):
+        """Handle when a nested field value is changed."""
+        self.selected_values[field_name] = value
+        self.update_status()
+        
+        # Emit the struct change with current values
+        if self.selected_values:
+            self.value_changed.emit(self.field_name, dict(self.selected_values))
+    
+    def on_nested_value_removed(self, field_name: str):
+        """Handle when a nested field value is removed."""
+        if field_name in self.selected_values:
+            del self.selected_values[field_name]
+        
+        self.update_status()
+        
+        # Emit struct change or removal
+        if self.selected_values:
+            self.value_changed.emit(self.field_name, dict(self.selected_values))
+        else:
+            self.value_removed.emit(self.field_name)
+    
+    def update_status(self):
+        """Update the status label and trash button state."""
+        count = len(self.selected_values)
+        total = len(self.struct_fields)
+        
+        self.status_label.setText(f"({count} of {total} set)")
+        
+        if count > 0:
+            self.status_label.setStyleSheet("""
+                QLabel {
+                    font-size: 10px;
+                    color: #e67e22;
+                    font-weight: bold;
+                    padding: 4px 8px;
+                    background-color: #fdf2e9;
+                    border: 1px solid #e67e22;
+                    border-radius: 3px;
+                    min-width: 120px;
+                }
+            """)
+            self.trash_button.setEnabled(True)
+            self.is_set = True
+        else:
+            self.status_label.setStyleSheet("""
+                QLabel {
+                    font-size: 10px;
+                    color: #7f8c8d;
+                    font-style: italic;
+                    padding: 4px 8px;
+                    background-color: #f8f9fa;
+                    border: 1px solid #e9ecef;
+                    border-radius: 3px;
+                    min-width: 120px;
+                }
+            """)
+            self.trash_button.setEnabled(False)
+            self.is_set = False
+    
+    def on_info_clicked(self):
+        """Handle info button click to toggle fields visibility."""
+        self.is_expanded = self.info_button.isChecked()
+        self.content_widget.setVisible(self.is_expanded)
+    
+    def on_trash_clicked(self):
+        """Handle trash button click."""
+        # Clear all nested selections and remove from config
+        self.selected_values.clear()
+        
+        # Reset all nested widgets
+        for widget in self.nested_widgets:
+            widget.reset_to_default()
+        
+        self.update_status()
+        self.value_removed.emit(self.field_name)
+    
+    def set_value(self, value: dict):
+        """Set the struct value programmatically."""
+        if isinstance(value, dict):
+            self.selected_values = dict(value)
+            
+            # Update nested widgets
+            for widget in self.nested_widgets:
+                field_name = widget.field_name
+                if field_name in value:
+                    widget.set_value(value[field_name])
+            
+            self.update_status()
+    
+    def update_trash_button_state(self, is_in_config: bool):
+        """Update the trash button state based on whether field is in config dictionary."""
+        self.is_set = is_in_config
+        if is_in_config:
+            self.trash_button.setEnabled(True)
+        else:
+            if not self.selected_values:  # Only disable if no nested values
+                self.trash_button.setEnabled(False)
+    
+    def reset_to_default(self):
+        """Reset the field to its default state."""
+        self.selected_values.clear()
+        
+        # Reset all nested widgets
+        for widget in self.nested_widgets:
+            widget.reset_to_default()
+        
+        self.update_status()
+
+
 class ClangFormatUI(QMainWindow):
     """Main window for the Clang-Format UI application."""
     
@@ -1429,7 +1795,12 @@ int main() {
             if field.get('type') not in basic_types and field.get('type') in self.format_data.get('enum_definitions', {})
         ]
         
-        print(f"Creating widgets for {len(boolean_fields)} boolean fields, {len(integer_fields)} integer fields, {len(string_fields)} string fields, and {len(enum_fields)} enum fields")
+        struct_fields = [
+            field for field in self.format_data.get('fields', [])
+            if field.get('type') not in basic_types and field.get('type') in self.format_data.get('struct_definitions', {})
+        ]
+        
+        print(f"Creating widgets for {len(boolean_fields)} boolean fields, {len(integer_fields)} integer fields, {len(string_fields)} string fields, {len(enum_fields)} enum fields, and {len(struct_fields)} struct fields")
         
         # Create boolean section
         if boolean_fields:
@@ -1530,18 +1901,44 @@ int main() {
                 self.field_widgets.append(widget)
                 self.config_layout.addWidget(widget)
         
+        # Create struct section
+        if struct_fields:
+            struct_header = QLabel(f"Struct Options ({len(struct_fields)} fields)")
+            struct_header.setStyleSheet("""
+                QLabel {
+                    font-size: 14px;
+                    font-weight: bold;
+                    color: #2c3e50;
+                    padding: 10px 5px;
+                    border-bottom: 1px solid #e67e22;
+                    margin-bottom: 10px;
+                    margin-top: 15px;
+                    background-color: #fdf2e9;
+                }
+            """)
+            self.config_layout.addWidget(struct_header)
+            
+            # Create widgets for each struct field
+            for field in struct_fields:
+                widget = StructFieldWidget(field, self.format_data.get('struct_definitions', {}), self.format_data)
+                widget.value_changed.connect(self.on_struct_value_changed)
+                widget.value_removed.connect(self.on_field_value_removed)
+                self.field_widgets.append(widget)
+                self.config_layout.addWidget(widget)
+        
         # Add stretch to push content to top
         self.config_layout.addStretch()
         
         # Show some statistics
         total_fields = len(self.format_data.get('fields', []))
-        other_fields = total_fields - len(boolean_fields) - len(integer_fields) - len(string_fields) - len(enum_fields)
+        other_fields = total_fields - len(boolean_fields) - len(integer_fields) - len(string_fields) - len(enum_fields) - len(struct_fields)
         
         stats_label = QLabel(f"Total fields: {total_fields}\n"
                            f"Boolean fields: {len(boolean_fields)}\n"
                            f"Integer fields: {len(integer_fields)}\n"
                            f"String fields: {len(string_fields)}\n"
                            f"Enum fields: {len(enum_fields)}\n"
+                           f"Struct fields: {len(struct_fields)}\n"
                            f"Other types: {other_fields}")
         stats_label.setStyleSheet("""
             QLabel {
@@ -1626,6 +2023,19 @@ int main() {
             widget.update_trash_button_state(True)  # Field is now in config
         
         print(f"Set enum {field_name} = {value}")
+        print(f"Current config has {len(self.config_values)} values")
+    
+    def on_struct_value_changed(self, field_name: str, struct_dict: dict):
+        """Handle when a struct field value is changed."""
+        # Add struct dict to config dictionary when any nested field changes
+        self.config_values[field_name] = struct_dict
+        
+        # Update trash button state for this field
+        widget = self.get_field_widget(field_name)
+        if widget:
+            widget.update_trash_button_state(True)  # Field is now in config
+        
+        print(f"Set struct {field_name} = {struct_dict}")
         print(f"Current config has {len(self.config_values)} values")
     
     def on_field_value_removed(self, field_name: str):
