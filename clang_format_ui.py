@@ -9,16 +9,18 @@ options based on the FormatStyle struct from LLVM's Format.h.
 import sys
 import json
 import re
+import yaml
 from pathlib import Path
 from typing import Dict, Any, List
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QScrollArea, QTextEdit, QSplitter, QLabel, QFrame, QCheckBox,
-    QPushButton, QGroupBox, QSpinBox, QLineEdit, QRadioButton, QButtonGroup
+    QPushButton, QGroupBox, QSpinBox, QLineEdit, QRadioButton, QButtonGroup,
+    QMenuBar, QMenu, QFileDialog, QMessageBox
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QFont, QIcon, QAction
 import re
 
 
@@ -1540,6 +1542,9 @@ class ClangFormatUI(QMainWindow):
         self.format_data: Dict[str, Any] = {}
         self.config_values: Dict[str, Any] = {}  # Store current configuration values
         self.field_widgets: List[QWidget] = []  # Track created widgets (both boolean and integer)
+        self.current_file_path: str = ""  # Track currently loaded file
+        self.is_modified: bool = False  # Track if current config has unsaved changes
+        self.is_quitting: bool = False  # Track if we're in the quit process
         self.init_ui()
         self.load_format_data()
         
@@ -1547,6 +1552,9 @@ class ClangFormatUI(QMainWindow):
         """Initialize the user interface."""
         self.setWindowTitle("Clang-Format Configuration UI")
         self.setGeometry(100, 100, 1400, 800)
+        
+        # Create menu bar
+        self.create_menu_bar()
         
         # Create central widget
         central_widget = QWidget()
@@ -1746,6 +1754,54 @@ int main() {
     
     return 0;
 }"""
+    
+    def create_menu_bar(self):
+        """Create the menu bar with File menu."""
+        menubar = self.menuBar()
+        
+        # File menu
+        file_menu = menubar.addMenu('&File')
+        
+        # New action
+        new_action = QAction('&New', self)
+        new_action.setShortcut('Ctrl+N')
+        new_action.setStatusTip('Create a new clang-format configuration')
+        new_action.triggered.connect(self.new_file)
+        file_menu.addAction(new_action)
+        
+        file_menu.addSeparator()
+        
+        # Open action
+        open_action = QAction('&Open...', self)
+        open_action.setShortcut('Ctrl+O')
+        open_action.setStatusTip('Open an existing .clang-format file')
+        open_action.triggered.connect(self.open_file)
+        file_menu.addAction(open_action)
+        
+        file_menu.addSeparator()
+        
+        # Save action
+        save_action = QAction('&Save', self)
+        save_action.setShortcut('Ctrl+S')
+        save_action.setStatusTip('Save the current configuration')
+        save_action.triggered.connect(self.save_file)
+        file_menu.addAction(save_action)
+        
+        # Save As action
+        save_as_action = QAction('Save &As...', self)
+        save_as_action.setShortcut('Ctrl+Shift+S')
+        save_as_action.setStatusTip('Save the current configuration with a new name')
+        save_as_action.triggered.connect(self.save_as_file)
+        file_menu.addAction(save_as_action)
+        
+        file_menu.addSeparator()
+        
+        # Quit action
+        quit_action = QAction('&Quit', self)
+        quit_action.setShortcut('Ctrl+Q')
+        quit_action.setStatusTip('Exit the application')
+        quit_action.triggered.connect(self.quit_application)
+        file_menu.addAction(quit_action)
         
     def load_format_data(self):
         """Load format style data from JSON file."""
@@ -1982,6 +2038,9 @@ int main() {
         if widget:
             widget.update_trash_button_state(True)  # Field is now in config
         
+        # Mark as modified
+        self.mark_as_modified()
+        
         print(f"Set boolean {field_name} = {value}")
         print(f"Current config has {len(self.config_values)} values")
     
@@ -1995,6 +2054,9 @@ int main() {
         if widget:
             widget.update_trash_button_state(True)  # Field is now in config
         
+        # Mark as modified
+        self.mark_as_modified()
+        
         print(f"Set integer {field_name} = {value}")
         print(f"Current config has {len(self.config_values)} values")
     
@@ -2007,6 +2069,9 @@ int main() {
         widget = self.get_field_widget(field_name)
         if widget:
             widget.update_trash_button_state(True)  # Field is now in config
+        
+        # Mark as modified
+        self.mark_as_modified()
         
         value_str = f"[{', '.join(value)}]" if isinstance(value, list) else f'"{value}"'
         print(f"Set string {field_name} = {value_str}")
@@ -2022,6 +2087,9 @@ int main() {
         if widget:
             widget.update_trash_button_state(True)  # Field is now in config
         
+        # Mark as modified
+        self.mark_as_modified()
+        
         print(f"Set enum {field_name} = {value}")
         print(f"Current config has {len(self.config_values)} values")
     
@@ -2034,6 +2102,9 @@ int main() {
         widget = self.get_field_widget(field_name)
         if widget:
             widget.update_trash_button_state(True)  # Field is now in config
+        
+        # Mark as modified
+        self.mark_as_modified()
         
         print(f"Set struct {field_name} = {struct_dict}")
         print(f"Current config has {len(self.config_values)} values")
@@ -2049,6 +2120,9 @@ int main() {
                 widget.update_trash_button_state(False)  # Field no longer in config
                 widget.reset_to_default()  # Reset checkbox to unchecked (default state)
             
+            # Mark as modified
+            self.mark_as_modified()
+            
             print(f"Removed {field_name}")
             print(f"Current config has {len(self.config_values)} values")
     
@@ -2058,6 +2132,243 @@ int main() {
             if widget.field_name == field_name:
                 return widget
         return None
+    
+    def new_file(self):
+        """Create a new configuration file."""
+        if self.is_modified:
+            reply = QMessageBox.question(
+                self, 
+                'Unsaved Changes',
+                'You have unsaved changes. Do you want to save them first?',
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+            )
+            
+            if reply == QMessageBox.Yes:
+                if not self.save_file():
+                    return  # User cancelled save
+            elif reply == QMessageBox.Cancel:
+                return
+        
+        # Clear current configuration
+        self.config_values.clear()
+        self.current_file_path = ""
+        self.is_modified = False
+        self.update_window_title()
+        
+        # Reset all field widgets to default state
+        for widget in self.field_widgets:
+            widget.reset_to_default()
+            widget.update_trash_button_state(False)
+    
+    def open_file(self):
+        """Open an existing .clang-format file."""
+        if self.is_modified:
+            reply = QMessageBox.question(
+                self,
+                'Unsaved Changes',
+                'You have unsaved changes. Do you want to save them first?',
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+            )
+            
+            if reply == QMessageBox.Yes:
+                if not self.save_file():
+                    return  # User cancelled save
+            elif reply == QMessageBox.Cancel:
+                return
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            'Open clang-format file',
+            '',
+            'Clang-format files (*.clang-format);;YAML files (*.yaml *.yml);;All files (*)'
+        )
+        
+        if file_path:
+            try:
+                self.load_clang_format_file(file_path)
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    'Error Loading File',
+                    f'Failed to load file "{file_path}":\n{str(e)}'
+                )
+    
+    def save_file(self) -> bool:
+        """Save the current configuration. Returns True if successful."""
+        if not self.current_file_path:
+            return self.save_as_file()
+        
+        try:
+            self.save_clang_format_file(self.current_file_path)
+            return True
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                'Error Saving File',
+                f'Failed to save file "{self.current_file_path}":\n{str(e)}'
+            )
+            return False
+    
+    def save_as_file(self) -> bool:
+        """Save the current configuration with a new name. Returns True if successful."""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            'Save clang-format file',
+            '.clang-format',
+            'Clang-format files (*.clang-format);;YAML files (*.yaml *.yml);;All files (*)'
+        )
+        
+        if file_path:
+            try:
+                self.save_clang_format_file(file_path)
+                return True
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    'Error Saving File',
+                    f'Failed to save file "{file_path}":\n{str(e)}'
+                )
+                return False
+        return False
+    
+    def load_clang_format_file(self, file_path: str):
+        """Load configuration from a .clang-format YAML file."""
+        with open(file_path, 'r', encoding='utf-8') as file:
+            # Load YAML content
+            yaml_content = yaml.safe_load(file)
+        
+        if not yaml_content:
+            yaml_content = {}
+        
+        # Clear current configuration
+        self.config_values.clear()
+        
+        # Reset all widgets first
+        for widget in self.field_widgets:
+            widget.reset_to_default()
+            widget.update_trash_button_state(False)
+        
+        # Apply loaded values to widgets
+        for key, value in yaml_content.items():
+            widget = self.get_field_widget(key)
+            if widget:
+                widget.set_value(value)
+                widget.update_trash_button_state(True)
+                self.config_values[key] = value
+        
+        # Update file tracking
+        self.current_file_path = file_path
+        self.is_modified = False
+        self.update_window_title()
+        
+        print(f"Loaded {len(yaml_content)} configuration values from {file_path}")
+    
+    def save_clang_format_file(self, file_path: str):
+        """Save current configuration to a .clang-format YAML file."""
+        # Create YAML content from current config values
+        yaml_content = dict(self.config_values)
+        
+        # Always add Language: Cpp if not specified
+        if 'Language' not in yaml_content:
+            yaml_content = {'Language': 'Cpp', **yaml_content}
+        
+        # Write to file in proper YAML format
+        with open(file_path, 'w', encoding='utf-8') as file:
+            # Write YAML document start
+            file.write('---\n')
+            
+            # Write content using yaml.dump with proper formatting
+            yaml_str = yaml.dump(
+                yaml_content,
+                default_flow_style=False,
+                sort_keys=False,  # Preserve order (Python 3.7+ dict order)
+                allow_unicode=True,
+                width=1000  # Prevent line wrapping for most values
+            )
+            file.write(yaml_str)
+            
+            # Write YAML document end
+            file.write('...\n')
+        
+        # Update file tracking
+        self.current_file_path = file_path
+        self.is_modified = False
+        self.update_window_title()
+        
+        print(f"Saved {len(yaml_content)} configuration values to {file_path}")
+    
+    def update_window_title(self):
+        """Update the window title to show current file and modification status."""
+        title = "Clang-Format Configuration UI"
+        
+        if self.current_file_path:
+            file_name = Path(self.current_file_path).name
+            title += f" - {file_name}"
+        else:
+            title += " - Untitled"
+        
+        if self.is_modified:
+            title += " *"
+        
+        self.setWindowTitle(title)
+    
+    def mark_as_modified(self):
+        """Mark the current configuration as modified."""
+        if not self.is_modified:
+            self.is_modified = True
+            self.update_window_title()
+    
+    def quit_application(self):
+        """Handle application quit with unsaved changes check."""
+        if self.is_modified and not self.is_quitting:
+            self.is_quitting = True  # Set flag to prevent double dialog
+            reply = QMessageBox.question(
+                self,
+                'Unsaved Changes',
+                'You have unsaved changes. Do you want to save them before quitting?',
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+            )
+            
+            if reply == QMessageBox.Yes:
+                if not self.save_file():
+                    self.is_quitting = False  # Reset flag if save was cancelled
+                    return  # User cancelled save, don't quit
+            elif reply == QMessageBox.Cancel:
+                self.is_quitting = False  # Reset flag if quit was cancelled
+                return  # User cancelled quit
+        
+        # If we get here, it's safe to quit
+        self.is_quitting = True  # Ensure flag is set for closeEvent
+        self.close()
+    
+    def closeEvent(self, event):
+        """Handle window close event (X button) with unsaved changes check."""
+        # If we're already in the quit process, don't show dialog again
+        if self.is_quitting:
+            event.accept()
+            return
+            
+        if self.is_modified:
+            self.is_quitting = True  # Set flag to prevent recursion
+            reply = QMessageBox.question(
+                self,
+                'Unsaved Changes',
+                'You have unsaved changes. Do you want to save them before quitting?',
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+            )
+            
+            if reply == QMessageBox.Yes:
+                if not self.save_file():
+                    self.is_quitting = False  # Reset flag if save was cancelled
+                    event.ignore()  # User cancelled save, don't close
+                    return
+            elif reply == QMessageBox.Cancel:
+                self.is_quitting = False  # Reset flag if quit was cancelled
+                event.ignore()  # User cancelled quit, don't close
+                return
+        
+        # If we get here, it's safe to close
+        event.accept()
 
 
 def main():
