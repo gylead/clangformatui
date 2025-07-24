@@ -252,7 +252,10 @@ class BooleanFieldWidget(QWidget):
     
     def on_checkbox_changed(self, state):
         """Handle checkbox state change."""
-        is_checked = state == Qt.Checked
+        # PySide6 stateChanged emits integers: 0=Unchecked, 1=PartiallyChecked, 2=Checked
+        is_checked = state == Qt.Checked.value  # state == 2
+        print(f"Checkbox state changed: state={state}, is_checked={is_checked}")
+        
         # Always emit value_changed when checkbox changes, regardless of checked state
         self.value_changed.emit(self.field_name, is_checked)
     
@@ -2122,6 +2125,8 @@ int main() {
         """Handle when a boolean field value is changed."""
         # Always add to config dictionary when checkbox changes
         self.config_values[field_name] = value
+        print(f"Set boolean {field_name} = {value}")
+        print(f"Current config has {len(self.config_values)} values")
         
         # Update trash button state for this field
         widget = self.get_field_widget(field_name)
@@ -2133,9 +2138,6 @@ int main() {
         
         # Schedule format update
         self.schedule_format_update()
-        
-        print(f"Set boolean {field_name} = {value}")
-        print(f"Current config has {len(self.config_values)} values")
     
     def on_integer_value_changed(self, field_name: str, value: int):
         """Handle when an integer field value is changed."""
