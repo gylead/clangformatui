@@ -107,15 +107,14 @@ clangformatui/
 ├── clang_format_ui.py          # Main GUI application
 ├── download_format_h.py        # Downloads Format.h from LLVM
 ├── parse_format_style.py       # Parses Format.h into JSON
-├── format_style_fields.json    # Parsed format definitions
-├── Format.h                    # LLVM Format.h header file
 ├── requirements.txt            # Python dependencies
 ├── setup.sh                    # Setup script
-├── test.clang-format          # Sample configuration file
 ├── README.md                   # This file
 ├── CHANGELOG.md                # Version history and changes
 └── LICENSE                     # License information
 ```
+
+**Note**: `Format.h` and `format_style_fields.json` are generated files created by running the setup process and are not included in the repository.
 
 ## Development
 
