@@ -1042,6 +1042,23 @@ class EnumFieldWidget(QWidget):
             }
         """)
     
+    def convert_enum_to_yaml_value(self, enum_name: str) -> str:
+        """Convert enum name (e.g., 'BOS_None') to YAML value (e.g., 'None')."""
+        # Remove the enum prefix (everything up to and including the first underscore)
+        if '_' in enum_name:
+            return enum_name.split('_', 1)[1]
+        return enum_name
+    
+    def convert_yaml_value_to_enum(self, yaml_value: str) -> str:
+        """Convert YAML value (e.g., 'None') to enum name (e.g., 'BOS_None')."""
+        # Find the enum that matches the YAML value
+        for enum_value in self.enum_values:
+            enum_name = enum_value.get("name", "")
+            if self.convert_enum_to_yaml_value(enum_name) == yaml_value:
+                return enum_name
+        # If no match found, return the original value
+        return yaml_value
+    
     def on_option_selected(self, checked: bool, value_name: str):
         """Handle when an enum option is selected."""
         if checked:  # Only handle when option is selected (not deselected)
@@ -1060,8 +1077,9 @@ class EnumFieldWidget(QWidget):
                 }
             """)
             
-            # Emit the value change
-            self.value_changed.emit(self.field_name, value_name)
+            # Convert enum name to YAML value and emit the change
+            yaml_value = self.convert_enum_to_yaml_value(value_name)
+            self.value_changed.emit(self.field_name, yaml_value)
             
             # Update radio button styles to highlight selected
             self.update_radio_button_styles()
@@ -1122,11 +1140,14 @@ class EnumFieldWidget(QWidget):
     
     def set_value(self, value: str):
         """Set the enum value programmatically."""
+        # Convert YAML value to enum name for UI display
+        enum_name = self.convert_yaml_value_to_enum(value)
+        
         for radio_button in self.radio_buttons:
-            if radio_button.text() == value:
+            if radio_button.text() == enum_name:
                 radio_button.setChecked(True)
-                self.selected_value = value
-                self.value_label.setText(value)
+                self.selected_value = enum_name
+                self.value_label.setText(enum_name)
                 self.value_label.setStyleSheet("""
                     QLabel {
                         font-size: 10px;
