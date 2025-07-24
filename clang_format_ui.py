@@ -18,6 +18,14 @@ import argparse
 from pathlib import Path
 from typing import Dict, Any, List
 
+# Global verbose mode flag
+VERBOSE_MODE = False
+
+def debug_print(*args, **kwargs):
+    """Print debug message only if verbose mode is enabled."""
+    if VERBOSE_MODE:
+        print(*args, **kwargs)
+
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QScrollArea, QTextEdit, QSplitter, QLabel, QFrame, QCheckBox,
@@ -254,7 +262,7 @@ class BooleanFieldWidget(QWidget):
         """Handle checkbox state change."""
         # PySide6 stateChanged emits integers: 0=Unchecked, 1=PartiallyChecked, 2=Checked
         is_checked = state == Qt.Checked.value  # state == 2
-        print(f"Checkbox state changed: state={state}, is_checked={is_checked}")
+        debug_print(f"Checkbox state changed: state={state}, is_checked={is_checked}")
         
         # Always emit value_changed when checkbox changes, regardless of checked state
         self.value_changed.emit(self.field_name, is_checked)
@@ -1907,7 +1915,7 @@ int main() {
         try:
             with open(json_file, 'r', encoding='utf-8') as f:
                 self.format_data = json.load(f)
-            print(f"Loaded {len(self.format_data.get('fields', []))} format options")
+            debug_print(f"Loaded {len(self.format_data.get('fields', []))} format options")
             
             # Create UI elements from format_data
             self.create_config_widgets()
@@ -1949,7 +1957,7 @@ int main() {
             if field.get('type') not in basic_types and field.get('type') in self.format_data.get('struct_definitions', {})
         ]
         
-        print(f"Creating widgets for {len(boolean_fields)} boolean fields, {len(integer_fields)} integer fields, {len(string_fields)} string fields, {len(enum_fields)} enum fields, and {len(struct_fields)} struct fields")
+        debug_print(f"Creating widgets for {len(boolean_fields)} boolean fields, {len(integer_fields)} integer fields, {len(string_fields)} string fields, {len(enum_fields)} enum fields, and {len(struct_fields)} struct fields")
         
         # Create boolean section
         if boolean_fields:
@@ -2125,8 +2133,8 @@ int main() {
         """Handle when a boolean field value is changed."""
         # Always add to config dictionary when checkbox changes
         self.config_values[field_name] = value
-        print(f"Set boolean {field_name} = {value}")
-        print(f"Current config has {len(self.config_values)} values")
+        debug_print(f"Set boolean {field_name} = {value}")
+        debug_print(f"Current config has {len(self.config_values)} values")
         
         # Update trash button state for this field
         widget = self.get_field_widget(field_name)
@@ -2155,8 +2163,8 @@ int main() {
         # Schedule format update
         self.schedule_format_update()
         
-        print(f"Set integer {field_name} = {value}")
-        print(f"Current config has {len(self.config_values)} values")
+        debug_print(f"Set integer {field_name} = {value}")
+        debug_print(f"Current config has {len(self.config_values)} values")
     
     def on_string_value_changed(self, field_name: str, value):
         """Handle when a string field value is changed."""
@@ -2175,8 +2183,8 @@ int main() {
         self.schedule_format_update()
         
         value_str = f"[{', '.join(value)}]" if isinstance(value, list) else f'"{value}"'
-        print(f"Set string {field_name} = {value_str}")
-        print(f"Current config has {len(self.config_values)} values")
+        debug_print(f"Set string {field_name} = {value_str}")
+        debug_print(f"Current config has {len(self.config_values)} values")
     
     def on_enum_value_changed(self, field_name: str, value: str):
         """Handle when an enum field value is changed."""
@@ -2194,8 +2202,8 @@ int main() {
         # Schedule format update
         self.schedule_format_update()
         
-        print(f"Set enum {field_name} = {value}")
-        print(f"Current config has {len(self.config_values)} values")
+        debug_print(f"Set enum {field_name} = {value}")
+        debug_print(f"Current config has {len(self.config_values)} values")
     
     def on_struct_value_changed(self, field_name: str, struct_dict: dict):
         """Handle when a struct field value is changed."""
@@ -2213,8 +2221,8 @@ int main() {
         # Schedule format update
         self.schedule_format_update()
         
-        print(f"Set struct {field_name} = {struct_dict}")
-        print(f"Current config has {len(self.config_values)} values")
+        debug_print(f"Set struct {field_name} = {struct_dict}")
+        debug_print(f"Current config has {len(self.config_values)} values")
     
     def on_field_value_removed(self, field_name: str):
         """Handle when a field value is removed."""
@@ -2233,8 +2241,8 @@ int main() {
             # Schedule format update
             self.schedule_format_update()
             
-            print(f"Removed {field_name}")
-            print(f"Current config has {len(self.config_values)} values")
+            debug_print(f"Removed {field_name}")
+            debug_print(f"Current config has {len(self.config_values)} values")
     
     def get_field_widget(self, field_name: str):
         """Get the widget for a specific field name (returns BooleanFieldWidget, IntegerFieldWidget, StringFieldWidget, or EnumFieldWidget)."""
@@ -2374,7 +2382,7 @@ int main() {
         # Schedule format update
         self.schedule_format_update()
         
-        print(f"Loaded {len(yaml_content)} configuration values from {file_path}")
+        debug_print(f"Loaded {len(yaml_content)} configuration values from {file_path}")
     
     def save_clang_format_file(self, file_path: str):
         """Save current configuration to a .clang-format YAML file."""
@@ -2408,7 +2416,7 @@ int main() {
         self.is_modified = False
         self.update_window_title()
         
-        print(f"Saved {len(yaml_content)} configuration values to {file_path}")
+        debug_print(f"Saved {len(yaml_content)} configuration values to {file_path}")
     
     def update_window_title(self):
         """Update the window title to show current file and modification status."""
@@ -2634,7 +2642,7 @@ int main() {
     
     def update_format_status(self, message: str):
         """Update the formatting status in the UI."""
-        print(f"Format status: {message}")
+        debug_print(f"Format status: {message}")
         
         # Update status label with appropriate styling
         if hasattr(self, 'format_status_label'):
@@ -2693,7 +2701,16 @@ def main():
         default='clang-format',
         help='Path to clang-format binary (default: clang-format from PATH)'
     )
+    parser.add_argument(
+        '--verbose', 
+        action='store_true',
+        help='Enable verbose debug output'
+    )
     args = parser.parse_args()
+    
+    # Set global verbose flag
+    global VERBOSE_MODE
+    VERBOSE_MODE = args.verbose
     
     app = QApplication(sys.argv)
     
