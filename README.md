@@ -1,3 +1,12 @@
+**Note:** This is an experiment. With the exception of this paragraph, everything in this repository has been created 
+by Github CoPilot in Visual Studio Code. I only wrote a lot of prompts. Of course, there is a lot of room for
+improvements. The UI is ugly, the source code structure is extremly simple and some features are missing. I did
+not correct any decision of the AI. I only asked for the features and for correction of for functional issues.
+
+So here is what the AI writes about the application:
+
+-------------------- snip here ----------------------------
+
 # Clang-Format Configuration UI
 
 A modern, user-friendly graphical interface for configuring clang-format options with real-time C++ code preview.
