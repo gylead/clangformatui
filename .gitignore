@@ -52,3 +52,6 @@ Thumbs.db
 format_style_fields.json
 Format.h
 venv/
+
+# Clang-format configuration files (user-specific)
+*.clang-format
