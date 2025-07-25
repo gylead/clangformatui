@@ -85,6 +85,30 @@ After running the setup script, follow these steps:
 source venv/bin/activate && python download_format_h.py && python parse_format_style.py && python clang_format_ui.py
 ```
 
+### Batch Formatting with format_directory.py
+
+The project includes a command-line script to format entire directories:
+
+```bash
+# Format all C/C++ files in a directory
+./format_directory.py /path/to/your/project
+
+# Use a specific clang-format binary
+./format_directory.py /path/to/project --clang-format /usr/bin/clang-format-15
+
+# Dry run - see what would be formatted without changing files
+./format_directory.py /path/to/project --dry-run
+
+# Verbose output
+./format_directory.py /path/to/project --verbose
+```
+
+The script:
+- Recursively finds all C/C++ source files (`.c`, `.cpp`, `.cxx`, `.cc`, `.c++`, `.h`, `.hpp`, `.hxx`, `.hh`, `.h++`)
+- Uses the `.clang-format` file in the target directory or any parent directory
+- Supports dry-run mode to preview changes
+- Provides detailed progress and error reporting
+
 ### Using the Interface
 
 1. **Configuration Panel (Left)**: Browse and modify clang-format options organized by type
